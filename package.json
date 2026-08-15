@@ -65,7 +65,7 @@
     "esbuild": "^0.28.2",
     "jsdom": "^23.2.0",
     "rimraf": "^5.0.5",
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=24"
