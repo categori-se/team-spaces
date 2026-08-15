@@ -50,10 +50,10 @@
     "import:data": "node scripts/import-data.mjs"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.723.0",
-    "@aws-sdk/client-s3": "^3.723.0",
-    "@aws-sdk/lib-dynamodb": "^3.723.0",
-    "@aws-sdk/s3-request-presigner": "^3.723.0",
+    "@aws-sdk/client-dynamodb": "^3.1108.0",
+    "@aws-sdk/client-s3": "^3.1108.0",
+    "@aws-sdk/lib-dynamodb": "^3.1108.0",
+    "@aws-sdk/s3-request-presigner": "^3.1108.0",
     "@observablehq/framework": "^1.13.4",
     "@observablehq/plot": "^0.6.17",
     "aws-cdk-lib": "^2.265.0",
