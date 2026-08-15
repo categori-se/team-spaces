@@ -1,0 +1,17 @@
+.DS_Store
+/.ai-workbench/
+/.aws-sam/
+/dist/
+**/dist/
+**/.observablehq/
+node_modules/
+**/node_modules/
+/.cdk.out/
+cdk.out/
+.env
+.env.*
+!.env.example
+coverage/
+yarn-error.log
+team-spaces-export-*.json
+team-spaces-data.json

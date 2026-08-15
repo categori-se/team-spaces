@@ -1,0 +1,73 @@
+{
+  "name": "teamspaces",
+  "version": "0.1.0",
+  "description": "Portfolio-first project and work management for small teams.",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/categori-se/team-spaces.git"
+  },
+  "homepage": "https://github.com/categori-se/team-spaces#readme",
+  "bugs": {
+    "url": "https://github.com/categori-se/team-spaces/issues"
+  },
+  "workspaces": [
+    "apps/web",
+    "services/api",
+    "packages/*",
+    "infra"
+  ],
+  "scripts": {
+    "clean": "npm run clean -w @teamspaces/web",
+    "dev": "npm run dev:all",
+    "dev:all": "node scripts/dev.mjs",
+    "dev:web": "npm run preview -w @teamspaces/web",
+    "dev:api": "npm run dev -w @teamspaces/api",
+    "format:check": "node scripts/check-format.mjs",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "tsc -p jsconfig.json --noEmit",
+    "test": "node --test",
+    "test:integration": "node --test services/api/test/*.test.js",
+    "test:infra": "node --test infra/test/*.test.js",
+    "build": "npm run build -w @teamspaces/api && npm run build -w @teamspaces/web",
+    "infra:synth": "npm run infra:synth:aws",
+    "infra:synth:aws": "node scripts/deploy-community.mjs --synth",
+    "infra:synth:hosted": "node scripts/deploy-hosted.mjs --synth --no-build",
+    "deploy": "node scripts/deploy-community.mjs",
+    "deploy:aws": "node scripts/deploy-community.mjs",
+    "deploy:hosted": "node scripts/deploy-hosted.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "check:hosted-auth": "node scripts/check-hosted-auth.mjs",
+    "audit:licenses": "node scripts/audit-licenses.mjs",
+    "licenses:update": "node scripts/audit-licenses.mjs --write",
+    "audit:vulns": "npm audit --audit-level=high",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "scan:secrets:history": "node scripts/scan-secrets.mjs --history",
+    "migrate:work-index": "node scripts/backfill-work-index.mjs",
+    "export:data": "node scripts/export-data.mjs",
+    "import:data": "node scripts/import-data.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.723.0",
+    "@aws-sdk/client-s3": "^3.723.0",
+    "@aws-sdk/lib-dynamodb": "^3.723.0",
+    "@aws-sdk/s3-request-presigner": "^3.723.0",
+    "@observablehq/framework": "^1.13.4",
+    "@observablehq/plot": "^0.6.17",
+    "aws-cdk-lib": "^2.265.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "aws-cdk": "^2.1136.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^23.2.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

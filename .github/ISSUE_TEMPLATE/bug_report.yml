@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible Team Spaces defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Team Spaces. Do not include credentials, private data, or undisclosed security issues. Report vulnerabilities using SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide a release version or full commit SHA.
+      placeholder: 0.1.0 or 0123456789abcdef...
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Local development
+        - AWS reference deployment
+        - Public demo
+        - Modified or other deployment
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable sequence, including relevant non-secret configuration.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Add sanitized logs, browser details, screenshots, or other context.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and removed secrets and private data.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true

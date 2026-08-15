@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose a focused product or platform improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should Team Spaces solve, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe successful behavior without prescribing implementation unless necessary.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: cost
+    attributes:
+      label: AWS cost and operational impact
+      description: Note any new requests, storage, schedules, fixed-price resources, external services, or migration needs.
+      placeholder: No new AWS resource; reuses the existing API and table.
+    validations:
+      required: true
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Contribution interest
+      options:
+        - I can help implement this
+        - I can help test or document this
+        - I am proposing this for discussion
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and the roadmap for related work.
+          required: true

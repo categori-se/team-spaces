@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "maxNodeModuleJsDepth": 0,
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  "include": [
+    "apps/**/*.js",
+    "services/**/*.js",
+    "packages/**/*.js",
+    "infra/**/*.js",
+    "scripts/**/*.mjs"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/node_modules",
+    "dist",
+    "**/test/**",
+    "apps/web/dist",
+    "apps/web/src/.observablehq"
+  ]
+}

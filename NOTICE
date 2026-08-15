@@ -1,0 +1,54 @@
+Team Spaces
+Copyright 2026 Team Spaces contributors
+
+Team Spaces source code, documentation, and project-authored assets are
+licensed under the Apache License, Version 2.0. See LICENSE.
+
+Asset provenance
+----------------
+
+- apps/web/src/assets/portfolio-hero.png is AI-assisted illustrative artwork
+  created for the Team Spaces project.
+- infra/assets/auth/team-spaces-favicon.svg,
+  infra/assets/auth/team-spaces-logo-dark.svg, and
+  infra/assets/auth/team-spaces-logo-light.svg are original vector artwork
+  created for the Team Spaces project.
+- Project-authored branding assets are covered by Apache-2.0 as works of
+  authorship. Their use as product branding is also subject to TRADEMARKS.md.
+
+Third-party asset
+-----------------
+
+apps/web/src/observable.png is included unmodified from the Observable
+Framework 1.13.4 project template.
+
+Copyright 2023-2024 Observable, Inc.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+Observable and its logos may be trademarks of Observable, Inc. Their inclusion
+does not imply endorsement of Team Spaces.
+
+Third-party software dependencies
+---------------------------------
+
+apps/web/src/LICENSE.txt is generated as an exact copy of the project LICENSE.
+apps/web/src/THIRD_PARTY_NOTICES.txt is generated from this project NOTICE plus
+a comprehensive inventory of installed third-party packages and the license
+and notice documents distributed with them. The web build publishes both files
+as downloads from the landing page.
+
+Do not edit generated notices directly. After changing dependencies, run
+`npm run licenses:update`, review the result, and commit it with the lockfile.
+The normal `npm run audit:licenses` command fails when any generated license
+artifact is missing or stale.

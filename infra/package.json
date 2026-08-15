@@ -1,0 +1,17 @@
+{
+  "name": "@teamspaces/infra",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "synth": "cdk synth --app 'node bin/teamspaces.js'",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.265.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

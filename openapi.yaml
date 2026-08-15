@@ -1,0 +1,881 @@
+openapi: 3.1.0
+info:
+  title: Team Spaces API
+  version: 0.1.0
+  description: >-
+    Authenticated workspace API plus a deliberately bounded shared-demo surface.
+    Public-demo requests use the /demo prefix, a server-owned fictional identity,
+    an isolated disposable data store, and a daily reset; they never grant access
+    to authenticated workspace data.
+  license:
+    name: Apache-2.0
+servers:
+  - url: /api/v1
+security:
+  - cognitoJwt: []
+components:
+  securitySchemes:
+    cognitoJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, correlationId]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        correlationId: {type: string}
+    PublicDemoMetadata:
+      type: object
+      required: [enabled, shared, editable, resetAt, nextResetAt, resetSchedule, seedVersion, mutationLimit, notice]
+      properties:
+        enabled: {type: boolean, const: true}
+        shared: {type: boolean, const: true}
+        editable: {type: boolean, const: true}
+        resetAt: {type: string, format: date-time}
+        nextResetAt: {type: string, format: date-time}
+        resetSchedule: {type: string, const: daily}
+        seedVersion: {type: string}
+        mutationLimit: {type: integer, minimum: 1}
+        notice:
+          type: string
+          description: Explains that edits are public, temporary, and unsuitable for sensitive information.
+    PublicDemoBootstrapResponse:
+      type: object
+      required: [data, correlationId]
+      properties:
+        data:
+          type: object
+          required: [user, workspace, membership, portfolios, projects, summary, workConfiguration, publicDemo]
+          properties:
+            user: {type: object, additionalProperties: true}
+            workspace: {type: object, additionalProperties: true}
+            membership: {type: object, additionalProperties: true}
+            portfolios: {type: array, items: {type: object, additionalProperties: true}}
+            projects: {type: array, items: {$ref: "#/components/schemas/Project"}}
+            summary: {type: object, additionalProperties: true}
+            workConfiguration: {$ref: "#/components/schemas/WorkConfiguration"}
+            publicDemo: {$ref: "#/components/schemas/PublicDemoMetadata"}
+        correlationId: {type: string}
+    Project:
+      type: object
+      required: [id, workspaceId, name, ownerId, status, health, priority, phase, version]
+      properties:
+        id: {type: string}
+        workspaceId: {type: string}
+        portfolioId: {type: string}
+        name: {type: string}
+        description: {type: string}
+        ownerId: {type: string}
+        status: {type: string}
+        health: {type: string}
+        priority: {type: string}
+        phase: {type: string}
+        startDate: {type: string}
+        targetDate: {type: string}
+        percentComplete: {type: integer}
+        version: {type: integer}
+    WorkItem:
+      type: object
+      required: [id, workspaceId, projectId, title, type, status, priority, version]
+      properties:
+        id: {type: string}
+        workspaceId: {type: string}
+        projectId: {type: string}
+        parentId: {type: string}
+        title: {type: string}
+        description: {type: string}
+        type: {type: string}
+        status: {type: string}
+        priority: {type: string}
+        assigneeId: {type: string}
+        reporterId: {type: string}
+        startDate: {type: string}
+        dueDate: {type: string}
+        estimateMinutes: {type: integer}
+        recordedMinutes: {type: integer}
+        effortPoints: {type: integer, description: Bounded effort estimate used for planning and workload summaries.}
+        periodId: {type: string, description: Optional stable identifier for a named time period.}
+        periodName: {type: string, description: User-defined time period label.}
+        periodGoal: {type: string, description: Outcome statement for the time period.}
+        intakeGroup: {type: string, description: User-facing intake grouping such as ideas, bugs, maintenance, or ready.}
+        milestoneName: {type: string, description: Target outcome or delivery milestone.}
+        blockedBy:
+          type: array
+          items: {type: string}
+        relatedIds:
+          type: array
+          items: {type: string}
+        watcherIds:
+          type: array
+          items: {type: string}
+        acceptanceCriteria: {type: string}
+        customFields:
+          type: object
+          additionalProperties: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+        version: {type: integer}
+    WorkTypeConfiguration:
+      type: object
+      required: [id, label, active]
+      properties:
+        id: {type: string, maxLength: 48, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"}
+        label: {type: string, minLength: 1, maxLength: 80}
+        active: {type: boolean}
+    WorkStatusConfiguration:
+      type: object
+      required: [id, label, active, closed]
+      properties:
+        id: {type: string, maxLength: 48, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"}
+        label: {type: string, minLength: 1, maxLength: 80}
+        active: {type: boolean}
+        closed: {type: boolean}
+    WorkTransitionConfiguration:
+      type: object
+      required: [fromStatusId, toStatusId, roles]
+      properties:
+        fromStatusId: {type: string}
+        toStatusId: {type: string}
+        roles:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [workspace-admin, portfolio-manager, project-manager, member, viewer]
+    WorkConfiguration:
+      type: object
+      required: [schemaVersion, version, defaultTypeId, defaultStatusId, types, statuses, transitions]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        version: {type: integer, minimum: 1}
+        defaultTypeId: {type: string}
+        defaultStatusId: {type: string}
+        types:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: {$ref: "#/components/schemas/WorkTypeConfiguration"}
+        statuses:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items: {$ref: "#/components/schemas/WorkStatusConfiguration"}
+        transitions:
+          type: array
+          maxItems: 300
+          items: {$ref: "#/components/schemas/WorkTransitionConfiguration"}
+    MeetingAgendaItem:
+      type: object
+      required: [id, title, durationMinutes, workItemIds, notes, outcome]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        title: {type: string, minLength: 1, maxLength: 200}
+        durationMinutes: {type: integer, minimum: 0, maximum: 1440}
+        presenterId: {type: string, maxLength: 128}
+        workItemIds:
+          type: array
+          maxItems: 25
+          uniqueItems: true
+          items: {type: string, maxLength: 128}
+        notes: {type: string, maxLength: 10000}
+        outcome:
+          type: string
+          maxLength: 10000
+          description: Writable only while entering, occupying, or leaving the in-progress state.
+    MeetingAgendaInput:
+      type: object
+      required: [id, title]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        title: {type: string, minLength: 1, maxLength: 200}
+        durationMinutes: {type: integer, minimum: 0, maximum: 1440, default: 0}
+        presenterId: {type: string, maxLength: 128}
+        workItemIds:
+          type: array
+          maxItems: 25
+          uniqueItems: true
+          default: []
+          items: {type: string, maxLength: 128}
+        notes: {type: string, maxLength: 10000, default: ""}
+        outcome:
+          type: string
+          maxLength: 10000
+          default: ""
+          description: Accepted only during the in-progress facilitation window.
+    MeetingAgendaCreateItem:
+      allOf:
+        - {$ref: "#/components/schemas/MeetingAgendaInput"}
+        - type: object
+          properties:
+            outcome: {type: string, const: "", default: ""}
+    Meeting:
+      type: object
+      description: The complete serialized meeting is limited to 32 KiB.
+      required: [id, workspaceId, projectId, title, description, startsAt, endsAt, status, location, participantIds, agendaItems, minutes, createdBy, version, createdAt, updatedAt]
+      properties:
+        id: {type: string}
+        workspaceId: {type: string}
+        projectId: {type: string}
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 20000}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        status: {type: string, enum: [draft, open, in-progress, closed, cancelled]}
+        location:
+          type: string
+          maxLength: 500
+          description: Plain text or an HTTP(S) URL.
+        participantIds:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, maxLength: 128}
+        agendaItems:
+          type: array
+          maxItems: 50
+          items: {$ref: "#/components/schemas/MeetingAgendaItem"}
+        minutes:
+          type: string
+          maxLength: 50000
+          description: Writable only while entering, occupying, or leaving the in-progress state.
+        createdBy: {type: string}
+        updatedBy: {type: string}
+        version: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    MeetingCreateInput:
+      type: object
+      description: The complete normalized meeting is limited to 32 KiB.
+      required: [projectId, title, startsAt, endsAt]
+      properties:
+        projectId: {type: string, minLength: 1, maxLength: 128}
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 20000}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        status: {type: string, const: draft, default: draft}
+        location: {type: string, maxLength: 500}
+        participantIds:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, maxLength: 128}
+        agendaItems:
+          type: array
+          maxItems: 50
+          items: {$ref: "#/components/schemas/MeetingAgendaCreateItem"}
+        minutes: {type: string, maxLength: 50000, const: ""}
+    MeetingPatchInput:
+      type: object
+      description: The resulting complete normalized meeting is limited to 32 KiB.
+      required: [projectId, version]
+      anyOf:
+        - required: [title]
+        - required: [description]
+        - required: [startsAt]
+        - required: [endsAt]
+        - required: [status]
+        - required: [location]
+        - required: [participantIds]
+        - required: [agendaItems]
+        - required: [minutes]
+      properties:
+        projectId: {type: string, minLength: 1, maxLength: 128}
+        version: {type: integer, minimum: 1}
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 20000}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        status: {type: string, enum: [draft, open, in-progress, closed, cancelled]}
+        location: {type: string, maxLength: 500}
+        participantIds:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, maxLength: 128}
+        agendaItems:
+          type: array
+          maxItems: 50
+          items: {$ref: "#/components/schemas/MeetingAgendaInput"}
+        minutes: {type: string, maxLength: 50000}
+    MeetingPage:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/Meeting"}
+        pageInfo:
+          type: object
+          required: [hasNextPage]
+          properties:
+            hasNextPage: {type: boolean}
+            endCursor: {type: string}
+    MeetingResponseEnvelope:
+      type: object
+      required: [data, correlationId]
+      properties:
+        data: {$ref: "#/components/schemas/Meeting"}
+        correlationId: {type: string}
+    MeetingPageResponseEnvelope:
+      type: object
+      required: [data, correlationId]
+      properties:
+        data: {$ref: "#/components/schemas/MeetingPage"}
+        correlationId: {type: string}
+    DocumentUploadIntentInput:
+      type: object
+      required: [projectId, filename, contentType, sizeBytes, checksumSha256]
+      properties:
+        projectId: {type: string}
+        workItemId: {type: string}
+        name: {type: string}
+        filename: {type: string, maxLength: 255}
+        contentType: {type: string, maxLength: 255}
+        sizeBytes: {type: integer, minimum: 1, maximum: 26214400}
+        checksumSha256:
+          type: string
+          description: Base64-encoded SHA-256 digest of the exact upload body.
+          pattern: "^[A-Za-z0-9+/]{43}=$"
+        category: {type: string}
+        description: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+    DocumentFinalizeInput:
+      type: object
+      required: [documentId, projectId]
+      properties:
+        documentId: {type: string}
+        projectId: {type: string}
+    DocumentUploadIntent:
+      type: object
+      required: [documentId, projectId, uploadUrl, uploadHeaders, expiresAt]
+      properties:
+        documentId: {type: string}
+        projectId: {type: string}
+        uploadUrl: {type: string, format: uri}
+        uploadHeaders:
+          type: object
+          required: [content-type, if-none-match, x-amz-server-side-encryption]
+          properties:
+            content-type: {type: string}
+            if-none-match: {type: string, const: "*"}
+            x-amz-server-side-encryption: {type: string, const: AES256}
+        expiresAt: {type: integer, description: Unix epoch seconds.}
+    DocumentUploadIntentResponse:
+      type: object
+      required: [data, correlationId]
+      properties:
+        data: {$ref: "#/components/schemas/DocumentUploadIntent"}
+        correlationId: {type: string}
+paths:
+  /demo/bootstrap:
+    get:
+      tags: [Public demo]
+      summary: Open the populated shared demo without a Cognito session.
+      description: >-
+        Returns a server-owned fictional workspace from the isolated public-demo
+        table. Selected project, work, planning, meeting, time, activity, saved-view,
+        and document-metadata routes are also available below /demo. Account,
+        membership, profile, workspace, security, and upload mutations are denied;
+        arbitrary future routes remain denied until explicitly reviewed.
+        Edits are shared, quota-limited, and discarded by the daily reset. Requests
+        must use the supported CloudFront application entry point. Public list pages
+        are capped at 10 records, mutable strings at 1,024 characters, request bodies
+        at 8 KiB, and serialized responses at 32 KiB.
+      security: []
+      responses:
+        "200":
+          description: Populated public-demo workspace and reset metadata.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicDemoBootstrapResponse"}
+        "403":
+          description: Unsupported entry point or route.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "429":
+          description: Shared demo request or daily mutation quota exceeded.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "413":
+          description: Public-demo request or result exceeded its size ceiling.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "503":
+          description: Public demo has not been initialized or is temporarily unavailable.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /bootstrap:
+    get:
+      summary: Return the authenticated user, workspace, membership, and runtime metadata.
+      responses:
+        "200": {description: Bootstrap data}
+  /me:
+    get:
+      summary: Return current user and membership.
+      responses:
+        "200": {description: Current user}
+  /accounts:
+    get:
+      summary: List accounts where the current user has active membership.
+      responses:
+        "200": {description: Account list}
+    post:
+      summary: Create a personal, team, or client account and make the current user its administrator.
+      responses:
+        "201": {description: Account}
+  /me/profile:
+    patch:
+      summary: Update the current user's Team Spaces profile and preferences.
+      responses:
+        "200": {description: Profile and membership}
+  /workspace:
+    get:
+      summary: Return workspace settings.
+      responses:
+        "200": {description: Workspace}
+    patch:
+      summary: Update workspace settings.
+      responses:
+        "200": {description: Workspace}
+  /work-configuration:
+    get:
+      summary: Return the workspace work-package types, statuses, defaults, and role-aware transitions.
+      responses:
+        "200":
+          description: Work configuration, with the built-in backward-compatible default when no record has been saved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkConfiguration"}
+    patch:
+      summary: Replace the versioned workspace work configuration with optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkConfiguration"}
+      responses:
+        "200":
+          description: Updated work configuration
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkConfiguration"}
+        "409": {description: Configuration version conflict}
+  /memberships:
+    get:
+      summary: List workspace memberships.
+      responses:
+        "200": {description: Membership list}
+    post:
+      summary: Create or update a workspace membership.
+      responses:
+        "201": {description: Membership}
+  /memberships/{userId}:
+    patch:
+      summary: Update a workspace member.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Membership}
+  /portfolios:
+    get:
+      summary: List portfolios.
+      responses:
+        "200": {description: Portfolio list}
+    post:
+      summary: Create a portfolio.
+      responses:
+        "201": {description: Created portfolio}
+  /portfolios/{portfolioId}:
+    get:
+      summary: Fetch one portfolio.
+      parameters:
+        - name: portfolioId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Portfolio}
+    patch:
+      summary: Update, archive, or restore a portfolio.
+      parameters:
+        - name: portfolioId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Portfolio}
+  /projects:
+    get:
+      summary: List projects.
+      responses:
+        "200": {description: Project list}
+    post:
+      summary: Create a project.
+      responses:
+        "201": {description: Created project}
+  /projects/{projectId}:
+    get:
+      summary: Fetch one project.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Project}
+    patch:
+      summary: Update a project with optimistic concurrency.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Project}
+        "409": {description: Version conflict}
+  /projects/{projectId}/work-items:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: List project tasks with planning, relationship, and detail fields.
+      parameters:
+        - name: type
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: assigneeId
+          in: query
+          schema: {type: string}
+        - name: dueFrom
+          in: query
+          schema: {type: string, format: date}
+        - name: dueTo
+          in: query
+          schema: {type: string, format: date}
+        - name: milestoneName
+          in: query
+          schema: {type: string}
+        - name: periodId
+          in: query
+          schema: {type: string}
+        - name: search
+          in: query
+          schema: {type: string}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [id-asc, updated-desc, due-asc], default: id-asc}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+        - name: cursor
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {description: Task list}
+    post:
+      summary: Create a task.
+      responses:
+        "201": {description: Created task}
+  /projects/{projectId}/work-items/{workItemId}:
+    patch:
+      summary: Update a project task with conditional optimistic concurrency.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string}
+        - name: workItemId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Task}
+        "409": {description: Version conflict}
+  /planning:
+    get:
+      summary: Return cross-project planning board data and period, intake, workload, and milestone summary.
+      parameters:
+        - name: projectId
+          in: query
+          schema: {type: string}
+        - name: type
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: assigneeId
+          in: query
+          schema: {type: string}
+        - name: dueFrom
+          in: query
+          schema: {type: string, format: date}
+        - name: dueTo
+          in: query
+          schema: {type: string, format: date}
+        - name: milestoneName
+          in: query
+          schema: {type: string}
+        - name: periodId
+          in: query
+          schema: {type: string}
+        - name: search
+          in: query
+          schema: {type: string}
+        - name: sort
+          in: query
+          description: Defaults to id-asc with projectId, due-asc with assigneeId, and updated-desc otherwise. due-asc requires assigneeId; id-asc requires projectId.
+          schema: {type: string, enum: [updated-desc, due-asc, id-asc]}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+        - name: cursor
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {description: Planning data}
+        "400": {description: Invalid filter, sort prerequisite, limit, date range, or cursor}
+  /meetings:
+    get:
+      summary: List one project's meetings in chronological order using a query-bound keyset cursor.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 25}
+        - name: cursor
+          in: query
+          schema: {type: string}
+      responses:
+        "200":
+          description: Chronological meeting page
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MeetingPageResponseEnvelope"}
+        "400": {description: Invalid project, limit, or cursor}
+        "404": {description: Project not found or unavailable to this member}
+    post:
+      summary: Create a draft meeting; the creator is always added as a participant.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Optional for compatibility; an exact retry replays the original meeting, while reuse for different content returns 409. Claims become eligible for asynchronous TTL cleanup after 24 hours.
+          schema: {type: string, minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MeetingCreateInput"}
+      responses:
+        "201":
+          description: Created draft meeting
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MeetingResponseEnvelope"}
+        "400": {description: Invalid idempotency key, schedule, participant, agenda, or cross-project task link}
+        "403": {description: Meeting management permission required}
+        "404": {description: Project not found or unavailable to this member}
+        "409": {description: Idempotency key was already used for different meeting content}
+  /meetings/{meetingId}:
+    parameters:
+      - name: meetingId
+        in: path
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 128}
+    get:
+      summary: Directly fetch one meeting inside its required project scope.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        "200":
+          description: Meeting
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MeetingResponseEnvelope"}
+        "400": {description: Invalid project or meeting identifier}
+        "404": {description: Project or meeting not found in the caller's scope}
+    patch:
+      summary: Conditionally update a meeting, its lifecycle, agenda, outcomes, or minutes.
+      description: Closed and cancelled meetings accept only a status-only reopen to open. No transition returns to draft. Outcomes and minutes are writable only in the in-progress facilitation window.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MeetingPatchInput"}
+      responses:
+        "200":
+          description: Updated meeting
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MeetingResponseEnvelope"}
+        "400": {description: Invalid lifecycle, schedule, participant, agenda, outcome, or task link}
+        "403": {description: Meeting management permission required}
+        "404": {description: Project or meeting not found in the caller's scope}
+        "409": {description: Meeting version conflict}
+  /time-entries:
+    get:
+      summary: List time entries.
+      responses:
+        "200": {description: Time entries}
+    post:
+      summary: Create a time entry.
+      responses:
+        "201": {description: Time entry}
+  /activity:
+    get:
+      summary: List activity.
+      responses:
+        "200": {description: Activity entries}
+    post:
+      summary: Record a project or task collaboration note.
+      responses:
+        "201": {description: Activity note accepted}
+  /documents:
+    get:
+      summary: List document metadata, optionally filtered by project, task, category, status, or search text.
+      responses:
+        "200": {description: Document list}
+  /documents/upload-intent:
+    post:
+      summary: Create a pending project document and return a single-use, length- and SHA-256-bound presigned PUT plus its exact required headers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DocumentUploadIntentInput"}
+      responses:
+        "201":
+          description: Upload intent
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DocumentUploadIntentResponse"}
+  /documents/finalize:
+    post:
+      summary: Verify uploaded length, media type, metadata, encryption, and SHA-256 before promoting a pending document.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DocumentFinalizeInput"}
+      responses:
+        "201": {description: Document}
+  /documents/{documentId}/download:
+    get:
+      summary: Create a presigned document download URL.
+      parameters:
+        - name: documentId
+          in: path
+          required: true
+          schema: {type: string}
+        - name: projectId
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Download URL}
+  /documents/{documentId}:
+    patch:
+      summary: Update document metadata, task linkage, or ready/archive state; pending promotion requires finalize.
+      parameters:
+        - name: documentId
+          in: path
+          required: true
+          schema: {type: string}
+        - name: projectId
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Document}
+  /saved-views:
+    get:
+      summary: List private saved views.
+      responses:
+        "200": {description: Saved views}
+    post:
+      summary: Save a private view.
+      responses:
+        "201": {description: Saved view}
+  /reports/portfolio-summary:
+    get:
+      summary: Return bounded portfolio summary data.
+      responses:
+        "200": {description: Portfolio summary}
+  /reports/planning-summary:
+    get:
+      summary: Return period, in-progress, intake, workload, and milestone summary data.
+      responses:
+        "200": {description: Planning summary}
+  /reports/project-timeline:
+    get:
+      summary: Return bounded project timeline data.
+      responses:
+        "200": {description: Timeline}
+  /application-data/summary:
+    get:
+      summary: Return bounded workspace record counts, document storage, and activity inventory.
+      responses:
+        "200": {description: Application data summary}
+  /attachments/upload-intent:
+    post:
+      summary: Create an attachment upload intent and presigned URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DocumentUploadIntentInput"}
+      responses:
+        "201": {description: Upload intent}
+  /attachments/finalize:
+    post:
+      summary: Finalize an uploaded attachment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DocumentFinalizeInput"}
+      responses:
+        "201": {description: Attachment}
+  /attachments/{attachmentId}/download:
+    get:
+      summary: Create a presigned attachment download URL.
+      parameters:
+        - name: attachmentId
+          in: path
+          required: true
+          schema: {type: string}
+        - name: projectId
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Download URL}

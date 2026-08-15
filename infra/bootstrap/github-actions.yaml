@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GitHub Actions OIDC identity and least-privilege Team Spaces deployment role
+
+Parameters:
+  GitHubOrganizationName:
+    Type: String
+  GitHubOrganizationId:
+    Type: String
+    AllowedPattern: "^[0-9]+$"
+  GitHubRepositoryName:
+    Type: String
+  GitHubRepositoryId:
+    Type: String
+    AllowedPattern: "^[0-9]+$"
+  GitHubEnvironmentName:
+    Type: String
+    Default: production
+  ReleaseArtifactBucketName:
+    Type: String
+    Description: Existing private bucket used for immutable release records
+  DeploymentRoleName:
+    Type: String
+    Default: team-spaces-production-deploy
+  OwnerTag:
+    Type: String
+    Default: self-hosted
+  CdkBootstrapQualifier:
+    Type: String
+    Default: hnb659fds
+
+Resources:
+  GitHubActionsOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Name
+          Value: !Sub ${GitHubOrganizationName}-github-actions
+        - Key: owner
+          Value: !Ref OwnerTag
+        - Key: managed-by
+          Value: cloudformation
+
+  TeamspacesProductionDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref DeploymentRoleName
+      Description: Deploy reviewed Team Spaces main commits through GitHub Actions and CDK
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubActionsOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub >-
+                  repo:*@${GitHubOrganizationId}/*@${GitHubRepositoryId}:environment:${GitHubEnvironmentName}
+      Policies:
+        - PolicyName: AssumeTeamspacesCdkBootstrapRoles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                  - sts:TagSession
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkBootstrapQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkBootstrapQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}
+        - PolicyName: WriteImmutableTeamspacesReleaseArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadReleaseBucketLocation
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ReleaseArtifactBucketName}
+              - Sid: ListTeamspacesReleasePrefix
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ReleaseArtifactBucketName}
+                Condition:
+                  StringLike:
+                    s3:prefix: projects/teamspaces/artifacts/web/releases/*
+              - Sid: WriteTeamspacesReleaseObjects
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListMultipartUploadParts
+                  - s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ReleaseArtifactBucketName}/projects/teamspaces/artifacts/web/releases/*
+      Tags:
+        - Key: Name
+          Value: !Ref DeploymentRoleName
+        - Key: application
+          Value: teamspaces
+        - Key: environment
+          Value: production
+        - Key: owner
+          Value: !Ref OwnerTag
+        - Key: managed-by
+          Value: cloudformation
+
+Outputs:
+  GitHubActionsOidcProviderArn:
+    Description: GitHub Actions OIDC provider created by this template
+    Value: !Ref GitHubActionsOidcProvider
+  TeamspacesProductionDeployRoleArn:
+    Description: Repository variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt TeamspacesProductionDeployRole.Arn
+  TrustedGitHubSubject:
+    Description: Immutable GitHub repository and production environment subject pattern
+    Value: !Sub >-
+      repo:*@${GitHubOrganizationId}/*@${GitHubRepositoryId}:environment:${GitHubEnvironmentName}

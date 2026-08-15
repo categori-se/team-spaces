@@ -1,0 +1,11 @@
+{
+  "apiBaseUrl": "http://localhost:8787/api/v1",
+  "authMode": "demo",
+  "appOrigin": "http://localhost:3000",
+  "cognito": {
+    "domain": "",
+    "clientId": "",
+    "redirectUri": "http://localhost:3000/",
+    "logoutUri": "http://localhost:3000/"
+  }
+}
