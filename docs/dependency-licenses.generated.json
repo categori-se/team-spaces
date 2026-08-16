@@ -31,122 +31,122 @@
   },
   {
     "name": "@aws-sdk/checksums",
-    "version": "3.1000.16",
+    "version": "3.1000.28",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/client-dynamodb",
-    "version": "3.1084.0",
+    "version": "3.1111.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/client-s3",
-    "version": "3.1084.0",
+    "version": "3.1111.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/core",
-    "version": "3.975.1",
+    "version": "3.977.8",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-env",
-    "version": "3.972.57",
+    "version": "3.972.69",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-http",
-    "version": "3.972.59",
+    "version": "3.972.71",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-ini",
-    "version": "3.973.1",
+    "version": "3.973.14",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-login",
-    "version": "3.972.63",
+    "version": "3.972.76",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-node",
-    "version": "3.972.66",
+    "version": "3.972.80",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-process",
-    "version": "3.972.57",
+    "version": "3.972.69",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-sso",
-    "version": "3.973.1",
+    "version": "3.973.13",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-web-identity",
-    "version": "3.972.63",
+    "version": "3.972.75",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/dynamodb-codec",
-    "version": "3.973.31",
+    "version": "3.973.43",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/endpoint-cache",
-    "version": "3.972.9",
+    "version": "3.972.11",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/lib-dynamodb",
-    "version": "3.1084.0",
+    "version": "3.1111.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/middleware-endpoint-discovery",
-    "version": "3.972.23",
+    "version": "3.972.29",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/middleware-sdk-s3",
-    "version": "3.972.62",
+    "version": "3.972.74",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/nested-clients",
-    "version": "3.997.31",
+    "version": "3.997.43",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/s3-request-presigner",
-    "version": "3.1084.0",
+    "version": "3.1111.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/signature-v4-multi-region",
-    "version": "3.996.39",
+    "version": "3.996.45",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/token-providers",
-    "version": "3.1083.0",
+    "version": "3.1111.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/types",
-    "version": "3.974.0",
+    "version": "3.974.4",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/util-dynamodb",
-    "version": "3.996.6",
+    "version": "3.996.9",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/xml-builder",
-    "version": "3.972.34",
+    "version": "3.972.39",
     "license": "Apache-2.0"
   },
   {
@@ -301,32 +301,32 @@
   },
   {
     "name": "@smithy/core",
-    "version": "3.29.2",
+    "version": "3.33.2",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/credential-provider-imds",
-    "version": "4.4.7",
+    "version": "4.5.2",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/fetch-http-handler",
-    "version": "5.6.4",
+    "version": "5.7.2",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/node-http-handler",
-    "version": "4.9.4",
+    "version": "4.11.2",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/signature-v4",
-    "version": "5.6.3",
+    "version": "5.7.2",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/types",
-    "version": "4.16.0",
+    "version": "4.17.2",
     "license": "Apache-2.0"
   },
   {
@@ -358,6 +358,11 @@
     "name": "@types/resolve",
     "version": "1.20.2",
     "license": "MIT"
+  },
+  {
+    "name": "@typescript/typescript-linux-x64",
+    "version": "7.0.2",
+    "license": "Apache-2.0"
   },
   {
     "name": "acorn",
@@ -536,7 +541,7 @@
   },
   {
     "name": "constructs",
-    "version": "10.6.0",
+    "version": "10.8.1",
     "license": "Apache-2.0"
   },
   {
@@ -1621,7 +1626,7 @@
   },
   {
     "name": "typescript",
-    "version": "5.9.3",
+    "version": "7.0.2",
     "license": "Apache-2.0"
   },
   {
