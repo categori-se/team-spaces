@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "aws-cdk-lib": "^2.265.0",
-    "constructs": "^10.4.2"
+    "constructs": "^10.8.1"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
