@@ -4384,7 +4384,27 @@ label[for="observablehq-sidebar-toggle"]:hover,
   --ts-info-text: #0550ae;
   --ts-warning-text: #7d4e00;
   --ts-danger-text: #a40e26;
-  --ts-landing-canvas: #f7faf9;
+  --ts-landing-canvas: #f1f5f7;
+  --ts-landing-border: #c4ced7;
+  --ts-hero-background: #eaf0f2;
+  --ts-hero-image-opacity: 0.86;
+  --ts-hero-image-filter: saturate(0.92) contrast(1.03);
+  --ts-hero-overlay: linear-gradient(
+    90deg,
+    rgba(247, 250, 249, 0.98),
+    rgba(247, 250, 249, 0.78) 46%,
+    rgba(247, 250, 249, 0.1)
+  );
+  --ts-hero-ink: #1f2328;
+  --ts-hero-copy: #424a53;
+  --ts-hero-note: #52606d;
+  --ts-hero-eyebrow: #167044;
+  --ts-hero-ghost-background: rgba(255, 255, 255, 0.9);
+  --ts-hero-ghost-border: rgba(31, 35, 40, 0.52);
+  --ts-hero-ghost-ink: #1f2328;
+  --ts-hero-ghost-hover-background: #ffffff;
+  --ts-hero-ghost-hover-border: rgba(31, 35, 40, 0.72);
+  --ts-hero-ghost-shadow: 0 3px 10px rgba(31, 35, 40, 0.1);
   --ts-radius-sm: 4px;
   --ts-radius: 6px;
   --ts-radius-lg: 8px;
@@ -4429,6 +4449,26 @@ label[for="observablehq-sidebar-toggle"]:hover,
   --ts-warning-text: #e3b341;
   --ts-danger-text: #ff7b72;
   --ts-landing-canvas: #101720;
+  --ts-landing-border: #3d444d;
+  --ts-hero-background: #101720;
+  --ts-hero-image-opacity: 0.58;
+  --ts-hero-image-filter: saturate(0.82) brightness(0.78) contrast(1.06);
+  --ts-hero-overlay: linear-gradient(
+    90deg,
+    rgba(11, 16, 24, 0.96),
+    rgba(11, 16, 24, 0.74) 48%,
+    rgba(11, 16, 24, 0.3)
+  );
+  --ts-hero-ink: #f0f6fc;
+  --ts-hero-copy: #b1bac4;
+  --ts-hero-note: #9da7b3;
+  --ts-hero-eyebrow: #7dd3c7;
+  --ts-hero-ghost-background: rgba(15, 23, 42, 0.82);
+  --ts-hero-ghost-border: rgba(248, 250, 252, 0.72);
+  --ts-hero-ghost-ink: #f8fafc;
+  --ts-hero-ghost-hover-background: #212830;
+  --ts-hero-ghost-hover-border: #f8fafc;
+  --ts-hero-ghost-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
   --ts-shadow: 0 8px 24px rgba(1, 4, 9, 0.56);
   --ts-shadow-raised: 0 3px 12px rgba(1, 4, 9, 0.5);
   --theme-background-a: var(--ts-page);
@@ -4471,6 +4511,26 @@ label[for="observablehq-sidebar-toggle"]:hover,
     --ts-warning-text: #e3b341;
     --ts-danger-text: #ff7b72;
     --ts-landing-canvas: #101720;
+    --ts-landing-border: #3d444d;
+    --ts-hero-background: #101720;
+    --ts-hero-image-opacity: 0.58;
+    --ts-hero-image-filter: saturate(0.82) brightness(0.78) contrast(1.06);
+    --ts-hero-overlay: linear-gradient(
+      90deg,
+      rgba(11, 16, 24, 0.96),
+      rgba(11, 16, 24, 0.74) 48%,
+      rgba(11, 16, 24, 0.3)
+    );
+    --ts-hero-ink: #f0f6fc;
+    --ts-hero-copy: #b1bac4;
+    --ts-hero-note: #9da7b3;
+    --ts-hero-eyebrow: #7dd3c7;
+    --ts-hero-ghost-background: rgba(15, 23, 42, 0.82);
+    --ts-hero-ghost-border: rgba(248, 250, 252, 0.72);
+    --ts-hero-ghost-ink: #f8fafc;
+    --ts-hero-ghost-hover-background: #212830;
+    --ts-hero-ghost-hover-border: #f8fafc;
+    --ts-hero-ghost-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
     --ts-shadow: 0 8px 24px rgba(1, 4, 9, 0.56);
     --ts-shadow-raised: 0 3px 12px rgba(1, 4, 9, 0.5);
     --theme-background-a: var(--ts-page);
@@ -6419,6 +6479,51 @@ body:has(.hero),
 .landing-page {
   min-width: 0;
   background: var(--ts-landing-canvas);
+  color: var(--ts-ink);
+}
+
+/* Keep a saved landing-page theme authoritative over the operating-system theme. */
+:root .landing-page .hero {
+  background: var(--ts-hero-background);
+}
+
+:root .landing-page .hero__image {
+  opacity: var(--ts-hero-image-opacity);
+  filter: var(--ts-hero-image-filter);
+}
+
+:root .landing-page .hero::after {
+  background: var(--ts-hero-overlay);
+}
+
+:root .landing-page .hero h1 {
+  color: var(--ts-hero-ink);
+}
+
+:root .landing-page .hero .eyebrow {
+  color: var(--ts-hero-eyebrow);
+}
+
+:root .landing-page .hero .hero__lede {
+  color: var(--ts-hero-copy);
+}
+
+:root .landing-page .hero .hero__note {
+  color: var(--ts-hero-note);
+}
+
+:root .landing-page .hero__actions .button.button--ghost,
+:root .landing-page .hero__actions .button.button--ghost:link,
+:root .landing-page .hero__actions .button.button--ghost:visited {
+  border-color: var(--ts-hero-ghost-border);
+  background: var(--ts-hero-ghost-background);
+  box-shadow: var(--ts-hero-ghost-shadow);
+  color: var(--ts-hero-ghost-ink);
+}
+
+:root .landing-page .hero__actions .button.button--ghost:hover {
+  border-color: var(--ts-hero-ghost-hover-border);
+  background: var(--ts-hero-ghost-hover-background);
 }
 
 .hero__lede {
@@ -6518,18 +6623,24 @@ body:has(.hero),
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--ts-line);
+  border: 1px solid var(--ts-landing-border);
   border-radius: var(--ts-radius-lg);
   padding: 22px;
   background: var(--ts-surface);
   color: var(--ts-ink);
   text-decoration: none;
-  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.05);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .landing-tour__card:hover {
   border-color: color-mix(in srgb, var(--ts-blue) 55%, var(--ts-line));
   background: color-mix(in srgb, var(--ts-info-surface) 45%, var(--ts-surface));
+  box-shadow: var(--ts-shadow-raised);
   transform: translateY(-1px);
 }
 
