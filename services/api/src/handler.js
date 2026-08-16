@@ -205,6 +205,13 @@ function createRequestHandler(options) {
       if (!originVerificationAllows(event.headers ?? {})) {
         throw new ForbiddenError("Requests must use the supported application entry point");
       }
+      if (
+        publicDemoMode
+        && process.env.PUBLIC_DEMO_HOST_REQUIRED === "true"
+        && header(event.headers ?? {}, "x-teamspaces-public-demo-host") !== "true"
+      ) {
+        throw new ForbiddenError("Use the supported public demo entry point.");
+      }
       const url = new URL(`https://api.local${rawPath}${rawQueryString ? `?${rawQueryString}` : ""}`);
       if (publicDemoMode && !publicDemoPathIsCanonical(rawPath, url.pathname)) {
         throw new ForbiddenError("This operation is not available in the shared demo.");

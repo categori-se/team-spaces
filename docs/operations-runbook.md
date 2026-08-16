@@ -15,7 +15,7 @@ This runbook covers both the minimal community profile and optional hosted opera
 
 Run these checks only when the hosted operations and public-demo layers are enabled:
 
-1. Run `APP_URL=<app-origin> npm run check:hosted-auth`. This probe intentionally requires the public demo and its bounded concurrent page reads; it is not a community-profile smoke command.
+1. Run `APP_URL=<app-origin> npm run check:hosted-auth`. For a separate demo hostname, also set `EXPECTED_PUBLIC_DEMO_ORIGIN=<demo-origin>` and set `PUBLIC_DEMO_DNS_READY=true` only after its traffic record is live. This probe intentionally requires the public demo and its bounded concurrent page reads; it is not a community-profile smoke command.
 2. Review CloudWatch alarms for Lambda errors, Lambda throttles, API 5xx responses, and DynamoDB throttles.
 3. Confirm the SNS alarm email subscription is active and review AWS Budget notifications. Hosted deploys must supply `TEAMSPACES_BUDGET_EMAIL`; activate the configured user-defined cost-allocation tag in the payer account before relying on the tag-filtered budget.
 4. Run a regular smoke workflow from the operator's release system.
@@ -23,15 +23,62 @@ Run these checks only when the hosted operations and public-demo layers are enab
 
 When an AWS Budget is enabled, the CDK stack includes a short notification-policy revision in its physical name. CloudFormation treats budget notification and subscriber changes as replacements, and AWS Budgets requires account-unique names. The revision lets CloudFormation create the updated alert policy before deleting the prior managed budget. Do not rename or delete a live budget manually during a deployment; after a successful replacement, confirm that exactly one current budget remains and still sends to the intended subscriber.
 
+## Isolated Public Demo Hostname Rollout
+
+`TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME` puts the enabled public demo on a distinct browser origin. It adds an alias to the existing CloudFront distribution and reuses the same static build, API Gateway API, and demo resources. It does not create a second distribution or continuously running service. The certificate in `us-east-1` must cover both the primary and demo names.
+
+Use two stages so public DNS never points at CloudFront before the alternate domain and certificate are ready.
+
+### Stage 1: deploy the alias with demo traffic DNS absent
+
+1. Request or select one certificate containing the exact primary and demo names. Add every ACM validation CNAME and wait for `ISSUED`.
+2. Set `TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME` and the new certificate ARN in protected deployment configuration. Keep the demo traffic CNAME absent and keep the hosted-check gate `PUBLIC_DEMO_DNS_READY=false`.
+3. Deploy an exact reviewed revision. Wait for CloudFormation to reach `UPDATE_COMPLETE` and CloudFront to report `Deployed`, then confirm the distribution lists both aliases and the intended certificate.
+4. Check the primary origin and the staged runtime configuration:
+
+   ```bash
+   APP_URL=https://team-spaces.example.com \
+   EXPECTED_PUBLIC_DEMO_ORIGIN=https://demo.team-spaces.example.com \
+   PUBLIC_DEMO_DNS_READY=false \
+   npm run check:hosted-auth
+   ```
+
+   The command still verifies the primary page, runtime configuration, exact Cognito callback/logout origin, and authorize endpoint. It reports `staged: true` and deliberately defers network calls to the demo hostname.
+
+Do not add the public demo traffic record before all four steps pass. ACM validation records are not application traffic records and should remain in place while the certificate is used.
+
+### Stage 2: add DNS last and enable the complete check
+
+1. Create the demo hostname CNAME (or provider-equivalent alias) pointing to the stack's exact `DistributionDomainName` output.
+2. Wait for public resolver propagation and verify that HTTPS presents the certificate containing the exact demo name.
+3. Set `PUBLIC_DEMO_DNS_READY=true` in the release environment. If the hosted check is part of the deployment workflow, rerun the same reviewed release SHA; otherwise run:
+
+   ```bash
+   APP_URL=https://team-spaces.example.com \
+   EXPECTED_PUBLIC_DEMO_ORIGIN=https://demo.team-spaces.example.com \
+   PUBLIC_DEMO_DNS_READY=true \
+   npm run check:hosted-auth
+   ```
+
+4. Confirm the full check reaches the demo root and seeded API, exercises bounded concurrent page reads, receives 403 from a protected API route on the demo host, and receives 403 from the demo API on the primary host. Exercise primary sign-in and sign-out separately; Cognito callback and logout URLs must contain only the primary origin.
+
+`PUBLIC_DEMO_DNS_READY` is a release-check gate, not a CDK resource switch. It prevents a deliberate DNS-last rollout from failing before the demo name can resolve; setting it to `true` does not create or modify DNS.
+
+### Rollback
+
+Remove the demo traffic CNAME first and set `PUBLIC_DEMO_DNS_READY=false`. Wait at least its published TTL and confirm the name no longer resolves through public resolvers before deploying a configuration that removes the CloudFront alias. This order prevents cached DNS from sending visitors to a distribution that no longer accepts the hostname. The primary application alias and its Cognito callback/logout URLs remain unchanged.
+
+If an urgent rollback cannot wait for CloudFront propagation, leave the unused demo alias and certificate attached after removing DNS; that is safer than removing the alias while cached traffic still exists. Remove the alias in a later reviewed deployment, retain the previous certificate through the rollback window, and delete it only after confirming that no distribution uses it.
+
 ## Public Demo Reset
 
 The public demo is isolated from authenticated data in its own table. EventBridge Scheduler resets it every day at 05:00 UTC. The reset prepares the inactive `a`/`b` slot and changes the active pointer only after seed verification; never manually delete the active slot or the protected application table.
 
 After deployment, verify:
 
-1. The stack outputs include `PublicDemoTableName`, `PublicDemoApiFunctionName`, and `PublicDemoResetFunctionName`.
-2. `GET <app-origin>/api/v1/demo/bootstrap` succeeds without a Cognito token and reports `publicDemo.shared=true`, a seed version, and the last/next reset time.
-3. `GET /api/v1/bootstrap` still requires Cognito.
+1. The stack outputs include `PublicDemoTableName`, `PublicDemoApiFunctionName`, and `PublicDemoResetFunctionName`; an isolated deployment also includes `PublicDemoUrl`.
+2. `GET <demo-origin>/api/v1/demo/bootstrap` succeeds without a Cognito token and reports `publicDemo.shared=true`, a seed version, and the last/next reset time. `<demo-origin>` is the primary application origin when no isolated hostname is configured.
+3. `GET <demo-origin>/api/v1/bootstrap` returns 403 when the isolated hostname is configured, and `GET <app-origin>/api/v1/demo/bootstrap` also returns 403. The protected route on the primary origin still requires Cognito.
 4. After the origin-enforcement deployment, a direct `execute-api` request to the demo bootstrap without the CloudFront origin header returns 403. During the documented first observation deployment, enforcement is deliberately off, so defer this check until the second deployment.
 5. The public-demo table contains `SYSTEM#PUBLIC_DEMO / ACTIVE`, its workspace points to the selected slot, and the reset DLQ has no visible messages.
 6. A task edit succeeds, while account/member/workspace and upload mutations return 403.
@@ -112,6 +159,8 @@ To roll back the application entry point without deleting the style or changing 
 ## DNS cutover
 
 Keep the live distribution, API, Cognito, bucket, certificate, and DNS validation identifiers in protected operator inventory. Before cutover, confirm the ACM certificate is `ISSUED`, the stack is `UPDATE_COMPLETE`, and the CloudFront distribution is deployed. If a client still sees `Server Not Found`, check public resolver propagation and local/VPN DNS cache before changing CloudFront.
+
+For the optional isolated demo origin, use [the two-stage hostname rollout](#isolated-public-demo-hostname-rollout). Its traffic record is added only after the additional alias is deployed, and rollback removes that traffic record before removing the alias.
 
 `runtime-config.json` is created outside the Observable build and must be preserved during web asset deployments. The CDK bucket deployment excludes `runtime-config.json` from prune so future deploys do not delete it.
 

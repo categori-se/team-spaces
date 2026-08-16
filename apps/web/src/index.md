@@ -76,6 +76,7 @@ const landingConfig = await runtimeConfig();
 const publicDemoLink = document.querySelector("[data-public-demo-link]");
 const publicDemoTour = document.querySelector("[data-public-demo-tour]");
 const publicDemoDisclosure = document.querySelector("#public-demo-disclosure");
+const publicDemoDestinationLinks = [...document.querySelectorAll("[data-public-demo-destination]")];
 const workspaceSignIn = document.querySelector("[data-workspace-sign-in]");
 const demoResetTime = document.querySelector("[data-demo-reset-time]");
 const landingSession = await currentSession().catch(() => ({authenticated: false, mode: "cognito"}));
@@ -89,6 +90,11 @@ if (landingConfig.authMode === "demo") {
   workspaceSignIn.classList.remove("button--ghost");
   workspaceSignIn.classList.add("button--primary");
 } else {
+  if (landingConfig.publicDemo?.origin) {
+    for (const link of [publicDemoLink, ...publicDemoDestinationLinks]) {
+      link.href = new URL(link.getAttribute("href"), landingConfig.publicDemo.origin).href;
+    }
+  }
   publicDemoLink.addEventListener("click", async (event) => {
     event.preventDefault();
     publicDemoLink.setAttribute("aria-busy", "true");

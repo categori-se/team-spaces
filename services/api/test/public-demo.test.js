@@ -78,6 +78,25 @@ test("public demo fixes identity and active workspace server-side", async () => 
   assert.equal(members.payload.data.items.some((item) => item.email === "attacker@example.test"), false);
 });
 
+test("isolated public demo requires the CloudFront-injected host marker", async () => {
+  const previous = process.env.PUBLIC_DEMO_HOST_REQUIRED;
+  process.env.PUBLIC_DEMO_HOST_REQUIRED = "true";
+  try {
+    const {handler} = demoHarness();
+    const unmarked = await send(handler, "GET", "/api/v1/demo/bootstrap");
+    assert.equal(unmarked.response.statusCode, 403);
+    assert.match(unmarked.payload.detail, /public demo entry point/);
+
+    const marked = await send(handler, "GET", "/api/v1/demo/bootstrap", undefined, {
+      "x-teamspaces-public-demo-host": "true"
+    });
+    assert.equal(marked.response.statusCode, 200);
+  } finally {
+    if (previous === undefined) delete process.env.PUBLIC_DEMO_HOST_REQUIRED;
+    else process.env.PUBLIC_DEMO_HOST_REQUIRED = previous;
+  }
+});
+
 test("the seeded demo supports every application read surface", async () => {
   const {handler, seed} = demoHarness();
   const project = seed.projects[0];

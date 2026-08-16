@@ -7,11 +7,15 @@ import {JSDOM} from "jsdom";
 const callbackPromiseKey = Symbol.for("teamspaces.auth.callback-promise");
 let importSequence = 0;
 
-async function withAuthBrowser(callback, search = "?code=callback-code&state=oauth-state&view=mine#public-demo-entry") {
+async function withAuthBrowser(
+  callback,
+  search = "?code=callback-code&state=oauth-state&view=mine#public-demo-entry",
+  options = {}
+) {
   const globalKeys = ["window", "location", "history", "sessionStorage", "__TEAMSPACES_LOCAL_CONFIG__", "fetch"];
   const previousDescriptors = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-    url: `http://127.0.0.1:3000/app${search}`
+    url: `${options.browserOrigin ?? "http://127.0.0.1:3000"}/app${search}`
   });
   dom.window.history.replaceState({preserve: "history-state"}, "", dom.window.location.href);
   Object.assign(globalThis, {
@@ -22,7 +26,7 @@ async function withAuthBrowser(callback, search = "?code=callback-code&state=oau
     __TEAMSPACES_LOCAL_CONFIG__: {
       apiBaseUrl: "http://127.0.0.1:8787/api/v1",
       authMode: "cognito",
-      appOrigin: "http://127.0.0.1:3000",
+      appOrigin: options.appOrigin ?? "http://127.0.0.1:3000",
       cognito: {
         domain: "https://auth.example.test",
         clientId: "client-id",
@@ -31,6 +35,7 @@ async function withAuthBrowser(callback, search = "?code=callback-code&state=oau
       publicDemo: {
         enabled: true,
         apiBaseUrl: "/api/v1/demo",
+        ...(options.publicDemoOrigin ? {origin: options.publicDemoOrigin} : {}),
         resetsAt: "05:00 UTC"
       }
     }
@@ -147,6 +152,84 @@ test("the landing demo action enters public demo without discarding Cognito toke
     assert.equal(sessionStorage.getItem("teamspaces.session"), rawSession);
     assert.equal(location.href, "/app#public-demo-entry");
   }, "");
+});
+
+test("an isolated demo origin auto-enters demo without sharing primary storage", async () => {
+  await withAuthBrowser(async ({currentSession}) => {
+    assert.equal(sessionStorage.getItem("teamspaces.public-demo"), null);
+    const session = await currentSession();
+    assert.equal(session.authenticated, true);
+    assert.equal(session.mode, "public-demo");
+    assert.equal(session.publicDemo.origin, "http://127.0.0.1:3000");
+    assert.equal(sessionStorage.getItem("teamspaces.public-demo"), null);
+  }, "", {
+    browserOrigin: "http://127.0.0.1:3000",
+    appOrigin: "http://localhost:3000",
+    publicDemoOrigin: "http://127.0.0.1:3000"
+  });
+});
+
+test("origin normalization does not misclassify the primary host as an isolated demo", async () => {
+  await withAuthBrowser(async ({currentSession}) => {
+    const session = await currentSession();
+    assert.equal(session.authenticated, false);
+    assert.equal(session.mode, "cognito");
+    assert.equal(sessionStorage.getItem("teamspaces.public-demo"), null);
+  }, "", {
+    browserOrigin: "http://localhost",
+    appOrigin: "http://LOCALHOST:80",
+    publicDemoOrigin: "http://localhost"
+  });
+});
+
+test("entering, leaving, and signing in cross the isolated demo boundary safely", async () => {
+  await withAuthBrowser(async ({beginSignIn, enterPublicDemo, signOut}) => {
+    globalThis.location = {
+      hostname: "localhost",
+      origin: "http://localhost:3000",
+      href: "http://localhost:3000/"
+    };
+    await enterPublicDemo();
+    assert.equal(location.href, "http://127.0.0.1:3000/app#public-demo-entry");
+    assert.equal(sessionStorage.getItem("teamspaces.public-demo"), null);
+
+    globalThis.location = {
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:3000",
+      href: "http://127.0.0.1:3000/app"
+    };
+    await signOut();
+    assert.equal(location.href, "http://localhost:3000");
+
+    location.href = "http://127.0.0.1:3000/";
+    await beginSignIn();
+    assert.equal(location.href, "http://localhost:3000");
+    assert.equal(sessionStorage.getItem("teamspaces.pkce.verifier"), null);
+    assert.equal(sessionStorage.getItem("teamspaces.oauth.state"), null);
+  }, "", {
+    browserOrigin: "http://127.0.0.1:3000",
+    appOrigin: "http://localhost:3000",
+    publicDemoOrigin: "http://127.0.0.1:3000"
+  });
+});
+
+test("Cognito authorization callbacks are never exchanged on the isolated demo origin", async () => {
+  await withAuthBrowser(async ({handleAuthCallback}) => {
+    let tokenCalls = 0;
+    globalThis.fetch = async () => {
+      tokenCalls += 1;
+      return tokenResponse();
+    };
+    await handleAuthCallback();
+    assert.equal(tokenCalls, 0);
+    assert.equal(sessionStorage.getItem("teamspaces.pkce.verifier"), null);
+    assert.equal(sessionStorage.getItem("teamspaces.oauth.state"), null);
+    assert.equal(location.search, "?view=mine");
+  }, "?code=callback-code&state=oauth-state&view=mine", {
+    browserOrigin: "http://127.0.0.1:3000",
+    appOrigin: "http://localhost:3000",
+    publicDemoOrigin: "http://127.0.0.1:3000"
+  });
 });
 
 test("leaving public demo does not sign out an existing Cognito session", async () => {

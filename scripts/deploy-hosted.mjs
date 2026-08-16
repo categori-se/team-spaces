@@ -19,6 +19,7 @@ const cdkArgs = commandArgs.filter((argument) => !["--synth", "--no-build"].incl
 const awsProfile = process.env.AWS_PROFILE || undefined;
 const app = "node infra/bin/teamspaces.js";
 const domainName = requiredEnvironment("TEAMSPACES_DOMAIN_NAME");
+const publicDemoDomainName = process.env.TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME?.trim();
 const certificateArn = requiredEnvironment("ACM_CERTIFICATE_ARN");
 const webBucketName = requiredEnvironment("TEAMSPACES_WEB_BUCKET_NAME");
 const existingUserPoolId = requiredEnvironment("EXISTING_USER_POOL_ID");
@@ -32,6 +33,23 @@ if (managedLoginBrandingAssetDirectory && !path.isAbsolute(managedLoginBrandingA
 if (!/^arn:[a-z0-9-]+:acm:us-east-1:\d{12}:certificate\/[a-z0-9][a-z0-9-]*$/i.test(certificateArn)) {
   console.error("ACM_CERTIFICATE_ARN must be an us-east-1 ACM certificate ARN");
   process.exit(1);
+}
+if (publicDemoDomainName) {
+  const validPublicDemoDomain = publicDemoDomainName.length <= 253
+    && publicDemoDomainName.split(".").length >= 2
+    && publicDemoDomainName.split(".").every((label) => (
+      label.length >= 1
+      && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    ));
+  if (!validPublicDemoDomain) {
+    console.error("TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME must be a bare DNS name");
+    process.exit(1);
+  }
+  if (publicDemoDomainName.toLowerCase() === domainName.toLowerCase()) {
+    console.error("TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME must differ from TEAMSPACES_DOMAIN_NAME");
+    process.exit(1);
+  }
 }
 const budgetEmail = process.env.TEAMSPACES_BUDGET_EMAIL;
 const originVerifySecret = process.env.TEAMSPACES_ORIGIN_SECRET;
@@ -48,6 +66,7 @@ const costCenterTag = process.env.TEAMSPACES_COST_CENTER_TAG || "teamspaces";
 const hostedContext = [
   "-c", `stackName=${stackName}`,
   "-c", `domainName=${domainName}`,
+  ...(publicDemoDomainName ? ["-c", `publicDemoDomainName=${publicDemoDomainName}`] : []),
   "-c", `certificateArn=${certificateArn}`,
   "-c", `webBucketName=${webBucketName}`,
   "-c", "generateWebBucketName=false",

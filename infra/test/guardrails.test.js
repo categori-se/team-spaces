@@ -314,6 +314,42 @@ test("rejects oversized public-demo bodies at the CloudFront edge", () => {
   assert.equal(apiBehavior.FunctionAssociations[0].EventType, "viewer-request");
 });
 
+test("isolated demo hostname cannot reach protected APIs or be spoofed from the primary host", () => {
+  const template = synthesizedTemplate({publicDemoDomainName: "demo.hosted.example.com"});
+  const resources = Object.values(template.Resources ?? {});
+  const guardFunction = resources.find((resource) => (
+    resource.Type === "AWS::CloudFront::Function"
+    && resource.Properties.FunctionCode.includes("isolatedDemoHost")
+  ));
+  const handler = Function(`${guardFunction.Properties.FunctionCode}\nreturn handler;`)();
+  const request = (host, method, uri, headers = {}) => ({
+    request: {method, uri, headers: {host: {value: host}, ...headers}}
+  });
+
+  const demo = handler(request("demo.hosted.example.com", "GET", "/api/v1/demo/bootstrap"));
+  assert.equal(demo.uri, "/api/v1/demo/bootstrap");
+  assert.equal(demo.headers["x-teamspaces-public-demo-host"].value, "true");
+  const mixedCaseDemo = handler(request("DEMO.HOSTED.EXAMPLE.COM", "GET", "/api/v1/demo/bootstrap"));
+  assert.equal(mixedCaseDemo.headers["x-teamspaces-public-demo-host"].value, "true");
+  assert.equal(handler(request("demo.hosted.example.com", "GET", "/api/v1/bootstrap")).statusCode, 403);
+  assert.equal(handler(request("demo.hosted.example.com", "GET", "/api/v1/demo%2fbootstrap")).statusCode, 403);
+  assert.equal(handler(request("demo.hosted.example.com", "GET", "/api/v1/demo/../bootstrap")).statusCode, 403);
+  assert.equal(handler(request("demo.hosted.example.com", "GET", "/api/v1/demo//bootstrap")).statusCode, 403);
+  assert.equal(handler(request("demo.hosted.example.com", "GET", "/api/v1/demo\\bootstrap")).statusCode, 403);
+  assert.equal(handler(request("hosted.example.com", "GET", "/api/v1/demo/bootstrap")).statusCode, 403);
+  assert.equal(handler(request("hosted.example.com", "GET", "/api/v1/private/../demo/bootstrap")).statusCode, 403);
+  assert.equal(handler(request("hosted.example.com", "GET", "/api/v1/%64emo/bootstrap")).statusCode, 403);
+
+  const primary = handler(request("hosted.example.com", "GET", "/api/v1/bootstrap", {
+    "x-teamspaces-public-demo-host": {value: "true"}
+  }));
+  assert.equal(primary.uri, "/api/v1/bootstrap");
+  assert.equal(primary.headers["x-teamspaces-public-demo-host"], undefined);
+  const health = handler(request("demo.hosted.example.com", "GET", "/api/v1/health"));
+  assert.equal(health.uri, "/api/v1/health");
+  assert.equal(health.headers["x-teamspaces-public-demo-host"], undefined);
+});
+
 test("keeps API errors intact and disables runtime configuration caching", () => {
   const template = synthesizedTemplate();
   const resources = Object.values(template.Resources ?? {});

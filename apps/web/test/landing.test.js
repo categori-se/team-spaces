@@ -73,6 +73,9 @@ test("landing offers an accessible no-account demo and a distinct real sign-in",
   assert.match(landing, /workspaceSignIn\.remove\(\)/);
   assert.match(landing, /publicDemoTour\.remove\(\)/);
   assert.match(landing, /publicDemoDisclosure\.remove\(\)/);
+  assert.match(landing, /landingConfig\.publicDemo\?\.origin/);
+  assert.match(landing, /\[publicDemoLink, \.\.\.publicDemoDestinationLinks\]/);
+  assert.match(landing, /new URL\(link\.getAttribute\("href"\), landingConfig\.publicDemo\.origin\)\.href/);
   assert.match(landing, /workspaceSignIn\.classList\.remove\("button--ghost"\)/);
   assert.match(landing, /workspaceSignIn\.classList\.add\("button--primary"\)/);
 });

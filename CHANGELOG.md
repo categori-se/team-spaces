@@ -17,6 +17,9 @@ to follow [Semantic Versioning](https://semver.org/) once tagged releases begin.
   inputs, empty-target protection, and explicit identity/attachment recovery
   boundaries.
 - Generated third-party license notices distributed with the web build.
+- An optional isolated public-demo hostname that reuses the existing
+  CloudFront distribution while keeping Cognito callbacks on the primary
+  application origin.
 
 ### Changed
 

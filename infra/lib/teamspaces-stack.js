@@ -47,6 +47,18 @@ function booleanContext(node, name, defaultValue) {
   return value === "true";
 }
 
+/** @param {unknown} value */
+function isValidDnsName(value) {
+  return typeof value === "string"
+    && value.length <= 253
+    && value.split(".").length >= 2
+    && value.split(".").every((label) => (
+      label.length >= 1
+      && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    ));
+}
+
 export class TeamSpacesStack extends Stack {
   /**
    * @param {Construct} scope
@@ -58,6 +70,16 @@ export class TeamSpacesStack extends Stack {
 
     const domainName = this.node.tryGetContext("domainName") ?? "team-spaces.example.com";
     const certificateArn = this.node.tryGetContext("certificateArn");
+    const configuredPublicDemoDomainName = this.node.tryGetContext("publicDemoDomainName");
+    const publicDemoDomainName = configuredPublicDemoDomainName
+      ? String(configuredPublicDemoDomainName).trim().toLowerCase()
+      : undefined;
+    if (publicDemoDomainName && !isValidDnsName(publicDemoDomainName)) {
+      throw new Error("publicDemoDomainName must be a bare DNS name");
+    }
+    if (publicDemoDomainName === String(domainName).toLowerCase()) {
+      throw new Error("publicDemoDomainName must differ from domainName");
+    }
     const budgetEmail = this.node.tryGetContext("budgetEmail");
     const generateWebBucketName = booleanContext(this.node, "generateWebBucketName", true);
     const configuredWebBucketName = this.node.tryGetContext("webBucketName");
@@ -121,10 +143,17 @@ export class TeamSpacesStack extends Stack {
     const publicDemoSeedVersion = "2";
     const publicDemoResetHourUtc = 5;
     const enablePublicDemo = booleanContext(this.node, "enablePublicDemo", false);
+    if (publicDemoDomainName && !enablePublicDemo) {
+      throw new Error("enablePublicDemo must be true when publicDemoDomainName is configured");
+    }
+    if (publicDemoDomainName && !certificateArn) {
+      throw new Error("certificateArn is required when publicDemoDomainName is configured");
+    }
     const enableOperations = booleanContext(this.node, "enableOperations", false);
     const enablePitr = booleanContext(this.node, "enablePitr", false);
     const workIndexReady = String(this.node.tryGetContext("workIndexReady") ?? "false") === "true";
     const appOrigin = `https://${domainName}`;
+    const publicDemoOrigin = publicDemoDomainName ? `https://${publicDemoDomainName}` : appOrigin;
     const workspaceName = this.node.tryGetContext("workspaceName") ?? "Team Spaces";
     const tags = {
       application: this.node.tryGetContext("applicationTag") ?? "teamspaces",
@@ -455,7 +484,8 @@ export class TeamSpacesStack extends Stack {
           PUBLIC_DEMO_MUTATION_LIMIT: "500",
           PUBLIC_DEMO_RESET_HOUR_UTC: String(publicDemoResetHourUtc),
           WORK_INDEX_READY: "true",
-          APP_ORIGIN: appOrigin,
+          APP_ORIGIN: publicDemoOrigin,
+          PUBLIC_DEMO_HOST_REQUIRED: String(Boolean(publicDemoDomainName)),
           ORIGIN_VERIFY_ENFORCED: String(originVerifyEnforced),
           ...(originVerifySecret ? {ORIGIN_VERIFY_SECRET: originVerifySecret} : {}),
           ...(originVerifyNextSecret ? {ORIGIN_VERIFY_SECRET_NEXT: originVerifyNextSecret} : {})
@@ -567,7 +597,11 @@ export class TeamSpacesStack extends Stack {
 
     const httpApi = new apigwv2.HttpApi(this, "HttpApi", {
       corsPreflight: {
-        allowOrigins: [appOrigin, ...(allowLocalDevelopmentOrigins ? ["http://localhost:3000"] : [])],
+        allowOrigins: [
+          appOrigin,
+          ...(publicDemoDomainName ? [publicDemoOrigin] : []),
+          ...(allowLocalDevelopmentOrigins ? ["http://localhost:3000"] : [])
+        ],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
@@ -651,10 +685,43 @@ function handler(event) {
     const publicDemoRequestGuard = enablePublicDemo
       ? new cloudfront.Function(this, "PublicDemoRequestGuard", {
         code: cloudfront.FunctionCode.fromInline(`
+function forbidden() {
+  return {
+    statusCode: 403,
+    statusDescription: 'Forbidden',
+    headers: {
+      'content-type': {value: 'application/problem+json; charset=utf-8'},
+      'cache-control': {value: 'no-store'}
+    },
+    body: JSON.stringify({
+      title: 'Forbidden',
+      status: 403,
+      detail: 'Use the supported Team Spaces application entry point.'
+    })
+  };
+}
+
 function handler(event) {
   var request = event.request;
   var uri = request.uri;
+  var isolatedDemoHost = ${JSON.stringify(publicDemoDomainName ?? "")};
+  var viewerHost = request.headers.host ? request.headers.host.value.toLowerCase() : '';
+  var isDemoHost = isolatedDemoHost && viewerHost === isolatedDemoHost;
+  var isDemoRoute = uri === '/api/v1/demo' || uri.indexOf('/api/v1/demo/') === 0;
   var isBoundedPublicRoute = uri === '/api/v1/health' || uri === '/api/v1/demo' || uri.indexOf('/api/v1/demo/') === 0;
+  if (isolatedDemoHost) {
+    delete request.headers['x-teamspaces-public-demo-host'];
+    var canonicalApiPath = uri.indexOf('/api/') === 0
+      && /^[A-Za-z0-9_\\/-]+$/.test(uri)
+      && uri.indexOf('//') === -1;
+    if (!canonicalApiPath) return forbidden();
+    if ((isDemoHost && uri.indexOf('/api/') === 0 && !isBoundedPublicRoute) || (!isDemoHost && isDemoRoute)) {
+      return forbidden();
+    }
+    if (isDemoHost && isDemoRoute) {
+      request.headers['x-teamspaces-public-demo-host'] = {value: 'true'};
+    }
+  }
   if (!isBoundedPublicRoute) return request;
 
   var lengthHeader = request.headers['content-length'];
@@ -718,7 +785,7 @@ function handler(event) {
     const distribution = new cloudfront.Distribution(this, "Distribution", {
       defaultRootObject: "index.html",
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      domainNames: certificateArn ? [domainName] : undefined,
+      domainNames: certificateArn ? [domainName, ...(publicDemoDomainName ? [publicDemoDomainName] : [])] : undefined,
       certificate: certificateArn ? acm.Certificate.fromCertificateArn(this, "Certificate", certificateArn) : undefined,
       defaultBehavior: {
         origin: webOrigin,
@@ -797,6 +864,7 @@ function handler(event) {
         enabled: enablePublicDemo,
         ...(enablePublicDemo ? {
           apiBaseUrl: "/api/v1/demo",
+          origin: publicDemoOrigin,
           resetsAt: `${String(publicDemoResetHourUtc).padStart(2, "0")}:00 UTC`
         } : {})
       },
@@ -952,6 +1020,7 @@ function handler(event) {
     }
 
     new cdk.CfnOutput(this, "DistributionDomainName", {value: distribution.distributionDomainName});
+    if (publicDemoDomainName) new cdk.CfnOutput(this, "PublicDemoUrl", {value: publicDemoOrigin});
     new cdk.CfnOutput(this, "WebBucketName", {value: webBucket.bucketName});
     new cdk.CfnOutput(this, "AttachmentBucketName", {value: attachmentBucket.bucketName});
     if (publicDemoTable && publicDemoApiFunction && publicDemoResetFunction) {
