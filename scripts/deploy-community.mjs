@@ -45,6 +45,7 @@ export function communityConfiguration(environment = process.env) {
   const cognitoDomainPrefix = environment.TEAMSPACES_COGNITO_DOMAIN_PREFIX;
   const budgetEmail = environment.TEAMSPACES_BUDGET_EMAIL;
   const enablePublicDemo = booleanEnvironment(environment, "TEAMSPACES_ENABLE_PUBLIC_DEMO", false);
+  const publicDemoDomainName = environment.TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME?.trim();
   const enableOperations = booleanEnvironment(environment, "TEAMSPACES_ENABLE_OPERATIONS", false);
   const enablePitr = booleanEnvironment(environment, "TEAMSPACES_ENABLE_PITR", false);
   const workIndexReady = booleanEnvironment(environment, "TEAMSPACES_WORK_INDEX_READY", false);
@@ -59,6 +60,15 @@ export function communityConfiguration(environment = process.env) {
   if (enableOperations === "true" && !budgetEmail) {
     throw new Error("TEAMSPACES_BUDGET_EMAIL is required when TEAMSPACES_ENABLE_OPERATIONS=true");
   }
+  if (publicDemoDomainName && !isValidCommunityDomainName(publicDemoDomainName)) {
+    throw new Error("TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME must be a bare DNS name");
+  }
+  if (publicDemoDomainName && enablePublicDemo !== "true") {
+    throw new Error("TEAMSPACES_ENABLE_PUBLIC_DEMO must be true when TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME is set");
+  }
+  if (publicDemoDomainName?.toLowerCase() === domainName?.toLowerCase()) {
+    throw new Error("TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME must differ from TEAMSPACES_DOMAIN_NAME");
+  }
 
   return {
     domainName,
@@ -72,6 +82,7 @@ export function communityConfiguration(environment = process.env) {
     cognitoDomainPrefix,
     budgetEmail,
     enablePublicDemo,
+    publicDemoDomainName,
     enableOperations,
     enablePitr,
     workIndexReady,
@@ -129,6 +140,7 @@ function main() {
     cognitoDomainPrefix,
     budgetEmail,
     enablePublicDemo,
+    publicDemoDomainName,
     enableOperations,
     enablePitr,
     workIndexReady,
@@ -141,6 +153,7 @@ function main() {
     "-c", `certificateArn=${certificateArn}`,
     "-c", "generateWebBucketName=true",
     "-c", `enablePublicDemo=${enablePublicDemo}`,
+    ...(publicDemoDomainName ? ["-c", `publicDemoDomainName=${publicDemoDomainName}`] : []),
     "-c", `enableOperations=${enableOperations}`,
     "-c", `enablePitr=${enablePitr}`,
     "-c", "useManagedLogin=false",

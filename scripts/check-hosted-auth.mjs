@@ -4,6 +4,12 @@ const applicationUrl = process.env.APP_URL ?? process.env.SMOKE_URL;
 if (!applicationUrl) throw new Error("APP_URL or SMOKE_URL is required");
 const expectedAuthDomain = process.env.AUTH_DOMAIN;
 const expectedAuthMode = process.env.EXPECTED_AUTH_MODE ?? "cognito";
+const expectedPublicDemoOrigin = process.env.EXPECTED_PUBLIC_DEMO_ORIGIN;
+const publicDemoDnsReadyValue = process.env.PUBLIC_DEMO_DNS_READY ?? "false";
+if (!new Set(["true", "false"]).has(publicDemoDnsReadyValue)) {
+  throw new Error("PUBLIC_DEMO_DNS_READY must be true or false");
+}
+const publicDemoDnsReady = publicDemoDnsReadyValue === "true";
 const baseUrl = new URL(applicationUrl);
 
 async function fetchText(url, options = {}) {
@@ -22,6 +28,25 @@ function sameOrigin(value) {
     return new URL(value).origin === baseUrl.origin;
   } catch {
     return false;
+  }
+}
+
+function exactHttpsOrigin(value, label) {
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== "https:"
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== "/"
+      || parsed.search
+      || parsed.hash
+    ) {
+      throw new Error("not an exact HTTPS origin");
+    }
+    return parsed;
+  } catch {
+    fail(`${label} must be an exact HTTPS origin.`, {value});
   }
 }
 
@@ -88,6 +113,16 @@ if (config.publicDemo?.apiBaseUrl !== "/api/v1/demo") {
   problems.push(`publicDemo.apiBaseUrl is ${config.publicDemo?.apiBaseUrl}, expected /api/v1/demo`);
 }
 if (!config.publicDemo?.resetsAt) problems.push("publicDemo.resetsAt is missing");
+let publicDemoBaseUrl = baseUrl;
+if (config.publicDemo?.origin) {
+  publicDemoBaseUrl = exactHttpsOrigin(config.publicDemo.origin, "publicDemo.origin");
+}
+const expectedPublicDemoBaseUrl = expectedPublicDemoOrigin
+  ? exactHttpsOrigin(expectedPublicDemoOrigin, "EXPECTED_PUBLIC_DEMO_ORIGIN")
+  : undefined;
+if (expectedPublicDemoBaseUrl && publicDemoBaseUrl.origin !== expectedPublicDemoBaseUrl.origin) {
+  problems.push(`publicDemo.origin is ${publicDemoBaseUrl.origin}, expected ${expectedPublicDemoBaseUrl.origin}`);
+}
 
 if (problems.length) {
   fail("Application auth runtime configuration is not ready.", {
@@ -115,7 +150,29 @@ if (![200, 302, 303].includes(authProbe.status)) {
   });
 }
 
-const publicDemoUrl = new URL(`${config.publicDemo.apiBaseUrl.replace(/\/$/, "")}/bootstrap`, baseUrl);
+if (publicDemoBaseUrl.origin !== baseUrl.origin && !publicDemoDnsReady) {
+  console.log(JSON.stringify({
+    ok: true,
+    staged: true,
+    applicationUrl: baseUrl.origin,
+    publicDemoUrl: publicDemoBaseUrl.origin,
+    authDomain: configuredAuthDomain.origin,
+    clientId: config.cognito.clientId,
+    authProbeStatus: authProbe.status,
+    message: "Public demo DNS checks are staged until PUBLIC_DEMO_DNS_READY=true."
+  }, null, 2));
+  process.exit(0);
+}
+
+const publicDemoRoot = await fetchText(publicDemoBaseUrl, {cache: "no-store"});
+if (!publicDemoRoot.response.ok || !publicDemoRoot.text.includes("Team Spaces")) {
+  fail("Public demo origin is not serving Team Spaces.", {
+    url: publicDemoBaseUrl.href,
+    status: publicDemoRoot.response.status
+  });
+}
+
+const publicDemoUrl = new URL(`${config.publicDemo.apiBaseUrl.replace(/\/$/, "")}/bootstrap`, publicDemoBaseUrl);
 const publicDemoProbe = await fetchText(publicDemoUrl, {cache: "no-store"});
 if (!publicDemoProbe.response.ok) {
   fail("Public demo bootstrap is not reachable without a Cognito session.", {
@@ -147,7 +204,7 @@ if (publicDemo?.shared !== true || publicDemo?.editable !== true || !publicDemo?
 // a demo Lambda concurrency cap that is lower than a normal page fan-out.
 const publicDemoPagePaths = ["/documents", "/projects", "/planning"];
 const publicDemoPageProbes = await Promise.all(publicDemoPagePaths.map((path) => (
-  fetchText(new URL(`${config.publicDemo.apiBaseUrl.replace(/\/$/, "")}${path}`, baseUrl), {cache: "no-store"})
+  fetchText(new URL(`${config.publicDemo.apiBaseUrl.replace(/\/$/, "")}${path}`, publicDemoBaseUrl), {cache: "no-store"})
 )));
 const failedPublicDemoPageProbes = publicDemoPageProbes
   .map(({response, text}, index) => ({
@@ -163,9 +220,27 @@ if (failedPublicDemoPageProbes.length) {
   });
 }
 
+if (publicDemoBaseUrl.origin !== baseUrl.origin) {
+  const protectedDemoHostProbe = await fetchText(new URL("/api/v1/bootstrap", publicDemoBaseUrl), {cache: "no-store"});
+  if (protectedDemoHostProbe.response.status !== 403) {
+    fail("The isolated demo hostname can reach a protected API route.", {
+      url: new URL("/api/v1/bootstrap", publicDemoBaseUrl).href,
+      status: protectedDemoHostProbe.response.status
+    });
+  }
+  const demoOnPrimaryProbe = await fetchText(new URL("/api/v1/demo/bootstrap", baseUrl), {cache: "no-store"});
+  if (demoOnPrimaryProbe.response.status !== 403) {
+    fail("The public demo API remains reachable on the authenticated application origin.", {
+      url: new URL("/api/v1/demo/bootstrap", baseUrl).href,
+      status: demoOnPrimaryProbe.response.status
+    });
+  }
+}
+
 console.log(JSON.stringify({
   ok: true,
   applicationUrl: baseUrl.origin,
+  publicDemoUrl: publicDemoBaseUrl.origin,
   authDomain: configuredAuthDomain.origin,
   clientId: config.cognito.clientId,
   authProbeStatus: authProbe.status,

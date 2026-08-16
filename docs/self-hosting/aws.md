@@ -32,7 +32,7 @@ You need:
 3. Node.js 24 or newer and npm.
 4. AWS CDK bootstrapped in the target account and region.
 5. A hostname you control.
-6. An issued public ACM certificate in `us-east-1` that covers that hostname. CloudFront requires its viewer certificate in `us-east-1`, even when other regional resources are deployed there as well.
+6. An issued public ACM certificate in `us-east-1` that covers every configured application hostname. CloudFront requires its viewer certificate in `us-east-1`, even when other regional resources are deployed there as well.
 
 Confirm the identity before every first deployment or destructive operation:
 
@@ -83,10 +83,20 @@ The installer also accepts optional identity settings without binding the reposi
 | `TEAMSPACES_ENABLE_PITR` | `false` | Protects the application table with size-priced point-in-time recovery. |
 | `TEAMSPACES_ENABLE_OPERATIONS` | `false` | Adds four core alarms, SNS email, and a tagged application Budget; requires `TEAMSPACES_BUDGET_EMAIL`. |
 | `TEAMSPACES_ENABLE_PUBLIC_DEMO` | `false` | Adds the isolated anonymous showcase table/API/reset lane; ordinary private teams should leave it off. |
+| `TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME` | none | Optional distinct browser origin for an enabled public demo. The certificate must cover both exact hostnames. |
 | `TEAMSPACES_BUDGET_EMAIL` | none | Required notification address when operations are enabled. |
 | `TEAMSPACES_ALLOW_LOCAL_DEVELOPMENT_ORIGINS` | `false` | Adds localhost OAuth callbacks, API CORS, and CSP access for deliberate deployed-backend testing; leave off in normal installations. |
 
 The community command intentionally uses generated S3 bucket names and creates a dedicated Cognito pool instead of importing another application's pool.
+
+To expose the optional demo on a separate browser origin, enable it and supply a bare hostname distinct from the primary name:
+
+```text
+TEAMSPACES_ENABLE_PUBLIC_DEMO=true
+TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME=demo.team-spaces.example.com
+```
+
+Use one `us-east-1` certificate whose subject alternative names cover both exact hostnames. The demo name becomes a second alias on the existing CloudFront distribution; the deployment does not create a second distribution or continuously running service.
 
 The root package remains marked `private` to prevent accidental npm publication. That setting does not affect self-hosting or the Apache-2.0 source license.
 
@@ -142,6 +152,10 @@ SMOKE_URL=https://team-spaces.example.com npm run smoke
 ```
 
 The supported browser entry point is CloudFront. The web and document buckets must remain private.
+
+When a separate public-demo hostname is configured, first validate a certificate covering both exact names and deploy the additional alias on the same CloudFront distribution. Add the demo traffic CNAME only after CloudFront reports the distribution as deployed. The demo hostname serves the same static build but automatically enters the isolated demo session. An exact-host guard rejects authenticated API routes on the demo hostname, rejects demo API routes on the primary hostname, removes spoofed demo-host markers, and requires the edge-added marker again in the demo Lambda. Cognito callback and logout URLs remain exclusively on the primary hostname. The marker is a browser-routing defense rather than a credential; an operator requiring CloudFront-only API access must also use the origin-secret controls below.
+
+Keep `PUBLIC_DEMO_DNS_READY=false` when running `npm run check:hosted-auth` during that first alias deployment. After DNS resolves and TLS is valid, set it to `true` so the check exercises the demo origin and both cross-origin 403 boundaries. This variable gates verification only; it does not create DNS. Follow the complete DNS-last and rollback sequence in [the operations runbook](../operations-runbook.md#isolated-public-demo-hostname-rollout).
 
 ### API origin boundary
 

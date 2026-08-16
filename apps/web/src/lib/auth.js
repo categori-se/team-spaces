@@ -29,6 +29,7 @@ export async function runtimeConfig() {
           publicDemo: {
             enabled: config.publicDemo?.enabled === true,
             apiBaseUrl: config.publicDemo?.apiBaseUrl ?? "/api/v1/demo",
+            origin: config.publicDemo?.origin ?? "",
             resetsAt: config.publicDemo?.resetsAt ?? ""
           }
         };
@@ -70,6 +71,27 @@ export function isPublicDemoActive() {
   }
 }
 
+function configuredPublicDemoOrigin(config) {
+  try {
+    return config.publicDemo?.origin ? new URL(config.publicDemo.origin).origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function configuredAppOrigin(config) {
+  try {
+    return config.appOrigin ? new URL(config.appOrigin).origin : location.origin;
+  } catch {
+    return location.origin;
+  }
+}
+
+function isIsolatedPublicDemoOrigin(config) {
+  const demoOrigin = configuredPublicDemoOrigin(config);
+  return Boolean(demoOrigin && demoOrigin !== configuredAppOrigin(config) && location.origin === demoOrigin);
+}
+
 function consumePublicDemoEntry(config) {
   try {
     const entryUrl = new URL(location.href);
@@ -103,13 +125,20 @@ function clearPublicDemoEntryMarker() {
 export async function enterPublicDemo() {
   const config = await runtimeConfig();
   if (!config.publicDemo?.enabled) throw new Error("The public demo is not available");
+  const demoOrigin = configuredPublicDemoOrigin(config);
+  if (demoOrigin && demoOrigin !== location.origin) {
+    location.href = new URL(`/app${publicDemoEntryHash}`, demoOrigin).href;
+    return;
+  }
   sessionStorage.setItem(publicDemoStorageKey, "active");
   location.href = `/app${publicDemoEntryHash}`;
 }
 
-export function exitPublicDemo() {
+export async function exitPublicDemo() {
   clearPublicDemoMode();
-  location.href = "/";
+  const config = await runtimeConfig();
+  const appOrigin = configuredAppOrigin(config);
+  location.href = appOrigin !== location.origin ? appOrigin : "/";
 }
 
 export async function currentSession() {
@@ -118,7 +147,10 @@ export async function currentSession() {
   if (config.authMode === "demo") {
     return {authenticated: true, mode: "demo", accessToken: undefined};
   }
-  if (config.publicDemo?.enabled && isPublicDemoActive()) {
+  const demoOrigin = configuredPublicDemoOrigin(config);
+  const isolatedDemoOrigin = isIsolatedPublicDemoOrigin(config);
+  const storedDemoModeApplies = (!demoOrigin || demoOrigin === location.origin) && isPublicDemoActive();
+  if (config.publicDemo?.enabled && (isolatedDemoOrigin || storedDemoModeApplies)) {
     return {
       authenticated: true,
       mode: "public-demo",
@@ -147,6 +179,12 @@ export async function getAccessToken() {
 export async function beginSignIn() {
   clearPublicDemoMode();
   const config = await runtimeConfig();
+  if (isIsolatedPublicDemoOrigin(config)) {
+    sessionStorage.removeItem(verifierStorageKey);
+    sessionStorage.removeItem(stateStorageKey);
+    location.href = configuredAppOrigin(config);
+    return;
+  }
   if (config.authMode === "demo") {
     location.href = "/app";
     return;
@@ -183,6 +221,12 @@ export function handleAuthCallback() {
 
 async function exchangeAuthCallback() {
   const config = await runtimeConfig();
+  if (isIsolatedPublicDemoOrigin(config)) {
+    sessionStorage.removeItem(verifierStorageKey);
+    sessionStorage.removeItem(stateStorageKey);
+    clearAuthCallbackUrl();
+    return;
+  }
   const params = new URLSearchParams(location.search);
   const code = params.get("code");
   const isAuthCallback = Boolean(code || params.get("error"));
@@ -284,8 +328,8 @@ function saveToken(token) {
 
 export async function signOut() {
   const config = await runtimeConfig();
-  if (isPublicDemoActive()) {
-    exitPublicDemo();
+  if (isPublicDemoActive() || isIsolatedPublicDemoOrigin(config)) {
+    await exitPublicDemo();
     return;
   }
   sessionStorage.removeItem(tokenStorageKey);

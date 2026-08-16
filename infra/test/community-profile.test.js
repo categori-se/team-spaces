@@ -221,6 +221,74 @@ test("optional public demo adds only its isolated request-priced lane", () => {
   });
 });
 
+test("optional public demo hostname shares CloudFront while isolating browser and auth origins", () => {
+  const withoutSeparateHostname = synthesizedTemplate({enablePublicDemo: "true"});
+  const template = synthesizedTemplate({
+    enablePublicDemo: "true",
+    publicDemoDomainName: "demo.community.example.com"
+  });
+  const resources = Object.values(template.Resources ?? {});
+  assert.deepEqual(resourceCounts(template), resourceCounts(withoutSeparateHostname));
+  assert.equal(resources.filter((resource) => resource.Type === "AWS::CloudFront::Distribution").length, 1);
+  const distribution = resources.find((resource) => resource.Type === "AWS::CloudFront::Distribution");
+  assert.deepEqual(distribution.Properties.DistributionConfig.Aliases, [
+    "community.example.com",
+    "demo.community.example.com"
+  ]);
+
+  const api = resources.find((resource) => resource.Type === "AWS::ApiGatewayV2::Api");
+  assert.deepEqual(api.Properties.CorsConfiguration.AllowOrigins, [
+    "https://community.example.com",
+    "https://demo.community.example.com"
+  ]);
+  const attachmentBucket = resources.find((resource) => (
+    resource.Type === "AWS::S3::Bucket" && resource.Properties.CorsConfiguration
+  ));
+  assert.deepEqual(attachmentBucket.Properties.CorsConfiguration.CorsRules[0].AllowedOrigins, [
+    "https://community.example.com"
+  ]);
+
+  const demoFunction = resources.find((resource) => (
+    resource.Type === "AWS::Lambda::Function"
+    && resource.Properties.Environment?.Variables?.PUBLIC_DEMO_MODE === "true"
+  ));
+  assert.equal(demoFunction.Properties.Environment.Variables.APP_ORIGIN, "https://demo.community.example.com");
+  assert.equal(demoFunction.Properties.Environment.Variables.PUBLIC_DEMO_HOST_REQUIRED, "true");
+  const apiFunction = resources.find((resource) => (
+    resource.Type === "AWS::Lambda::Function"
+    && resource.Properties.Environment?.Variables?.ATTACHMENT_BUCKET_NAME
+  ));
+  assert.equal(apiFunction.Properties.Environment.Variables.APP_ORIGIN, "https://community.example.com");
+
+  const client = resources.find((resource) => resource.Type === "AWS::Cognito::UserPoolClient");
+  assert.equal(client.Properties.CallbackURLs.includes("https://community.example.com/app"), true);
+  assert.equal(client.Properties.CallbackURLs.some((url) => url.includes("demo.community.example.com")), false);
+  assert.equal(client.Properties.LogoutURLs.includes("https://community.example.com"), true);
+  assert.equal(client.Properties.LogoutURLs.some((url) => url.includes("demo.community.example.com")), false);
+
+  const runtimeConfig = resources.find((resource) => (
+    resource.Type === "Custom::AWS" && JSON.stringify(resource).includes("runtime-config.json")
+  ));
+  const serializedRuntime = JSON.stringify(runtimeConfig.Properties).replaceAll("\\", "");
+  assert.match(serializedRuntime, /"origin": "https:\/\/demo\.community\.example\.com"/);
+  assert.match(serializedRuntime, /"redirectUri": "https:\/\/community\.example\.com\/app"/);
+  assert.match(serializedRuntime, /"logoutUri": "https:\/\/community\.example\.com"/);
+  assert.equal(template.Outputs.PublicDemoUrl.Value, "https://demo.community.example.com");
+
+  assert.throws(
+    () => synthesizedTemplate({enablePublicDemo: "false", publicDemoDomainName: "demo.community.example.com"}),
+    /enablePublicDemo must be true/
+  );
+  assert.throws(
+    () => synthesizedTemplate({enablePublicDemo: "true", publicDemoDomainName: "community.example.com"}),
+    /must differ from domainName/
+  );
+  assert.throws(
+    () => synthesizedTemplate({enablePublicDemo: "true", publicDemoDomainName: "demo.community.example.com", certificateArn: undefined}),
+    /certificateArn is required/
+  );
+});
+
 test("optional operations add four core alarms and notification resources without demo alarms", () => {
   const core = synthesizedTemplate();
   const operations = synthesizedTemplate({
@@ -339,4 +407,19 @@ test("community deploy validation accepts placeholders but rejects a non-us-east
     () => configuration({TEAMSPACES_ENABLE_OPERATIONS: "true"}),
     /TEAMSPACES_BUDGET_EMAIL is required/
   );
+  assert.throws(
+    () => configuration({TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME: "demo.community.example.com"}),
+    /TEAMSPACES_ENABLE_PUBLIC_DEMO must be true/
+  );
+  assert.throws(
+    () => configuration({
+      TEAMSPACES_ENABLE_PUBLIC_DEMO: "true",
+      TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME: "community.example.com"
+    }),
+    /must differ from TEAMSPACES_DOMAIN_NAME/
+  );
+  assert.equal(configuration({
+    TEAMSPACES_ENABLE_PUBLIC_DEMO: "true",
+    TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME: "demo.community.example.com"
+  }).publicDemoDomainName, "demo.community.example.com");
 });
