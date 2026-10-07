@@ -634,11 +634,6 @@ brace-expansion@5.0.12
   Source: git+https://github.com/juliangruber/brace-expansion.git
   Resolved license documents: LICENSE
 
-brace-expansion@5.0.9
-  Declared license: MIT
-  Source: git+https://github.com/juliangruber/brace-expansion.git
-  Resolved license documents: LICENSE
-
 bundle-name@4.1.0
   Declared license: MIT
   Source: sindresorhus/bundle-name
@@ -6603,7 +6598,6 @@ SOFTWARE.
 Document SHA-256: 9c63a23124d68cd30cd316a94a1a0bca34f032786df6df69fc4b5f136bac8d2e
 Applies to:
   - brace-expansion@5.0.12 (LICENSE)
-  - brace-expansion@5.0.9 (LICENSE)
 --------------------------------------------------------------------------------
 MIT License
 

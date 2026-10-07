@@ -490,11 +490,6 @@
     "license": "MIT"
   },
   {
-    "name": "brace-expansion",
-    "version": "5.0.9",
-    "license": "MIT"
-  },
-  {
     "name": "bundle-name",
     "version": "4.1.0",
     "license": "MIT"

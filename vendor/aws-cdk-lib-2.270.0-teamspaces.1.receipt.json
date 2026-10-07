@@ -1,0 +1,46 @@
+{
+  "schema": "teamspaces-vendored-cdk-v1",
+  "inputs": {
+    "cdk": {
+      "url": "https://registry.npmjs.org/aws-cdk-lib/-/aws-cdk-lib-2.270.0.tgz",
+      "integrity": "sha512-xoO9FEqcVTTK39N6n+LxvAAsS5WZSGX/p+uv3l2W+LXDEIWctq6VECdluuFwdXnbyf4v4eIxo2btrkUepnEy0Q=="
+    },
+    "brace": {
+      "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz",
+      "integrity": "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ=="
+    }
+  },
+  "upstream_cdk_version": "2.270.0",
+  "upstream_bundled_brace_version": "5.0.9",
+  "patched_bundled_brace_version": "5.0.12",
+  "unchanged_cdk_files": 7500,
+  "unchanged_cdk_tree_sha256": "97d56cf19070e71b015d07f8ff04318941c748744bd620363c22d94c90f78582",
+  "replacement_tree_sha256": "8581dbffa34bef4428db47394464f30850802f3cbf9a4f05f29f90a4d2101734",
+  "replacement_files": {
+    "LICENSE": "9c63a23124d68cd30cd316a94a1a0bca34f032786df6df69fc4b5f136bac8d2e",
+    "README.md": "e93dbbc034d09eb64681e11304d21551467a391d29241538953b6d57859788db",
+    "dist/commonjs/index.d.ts": "b74929b2e5433150c0c7f6a3e7bcd1aadff6b82305584b25754ab38273ea731d",
+    "dist/commonjs/index.d.ts.map": "4081276536fa8a61b8ecf72c1b3cb65d354aa9f42b9952aa7c7aa3df69b76224",
+    "dist/commonjs/index.js": "e0ede97c712339a70bae2c96c675b1ffd30052bdf57f37f5a97b5945c40a9ae6",
+    "dist/commonjs/index.js.map": "030adad11afc034a17f6c008f25a3779e3988f56d067016cee00948725b00d24",
+    "dist/commonjs/package.json": "8005a3491db7d92f36ac66369861589f9c47123d3a7c71e643fc2c06168cd45a",
+    "dist/esm/index.d.ts": "b74929b2e5433150c0c7f6a3e7bcd1aadff6b82305584b25754ab38273ea731d",
+    "dist/esm/index.d.ts.map": "4081276536fa8a61b8ecf72c1b3cb65d354aa9f42b9952aa7c7aa3df69b76224",
+    "dist/esm/index.js": "eea9a18920e1cde68f0068c36c040541ad6e93b0bb89eaab38c8ab49925b90a8",
+    "dist/esm/index.js.map": "181bf3ff0deaaedfcf28b02c260ab5316cb2a012d89070ad44d298dcfd7166dc",
+    "dist/esm/package.json": "3ca9d4afd21425087cf31893b8f9f63c81b0b8408db5e343ca76e5f8aa26ab9a",
+    "package.json": "8af7dc0916002266f3b01459ef691d9f834d8ecdb0e021263280a50b913d85fa"
+  },
+  "artifact": "aws-cdk-lib-2.270.0-teamspaces.1.tgz",
+  "artifact_bytes": 37862428,
+  "artifact_sha256": "42ab570de7dade2f852e2b0abbb998590312287e9274c3803c08c4bb376647e1",
+  "artifact_integrity": "sha512-7ybnDA9AKuduPjxoa+dWXzXp3wG7YunY8X6Eo2H+6U23xFhU5W4DudshS1tqi00wrOABaOIQ1BaonfVUCwI2zg==",
+  "artifact_tree_sha256": "a1a68fa5b1bb4dc29b9b8258f3966c250b27461ef30cb8b26067f83f30222579",
+  "licenses_retained": [
+    "package/LICENSE",
+    "package/NOTICE",
+    "package/node_modules/brace-expansion/LICENSE"
+  ],
+  "additional_notice": "package/TEAMSPACES_PATCH_NOTICE.md",
+  "audit_exemptions": []
+}
