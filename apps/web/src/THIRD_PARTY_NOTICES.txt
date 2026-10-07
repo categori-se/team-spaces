@@ -110,13 +110,13 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/client-dynamodb@3.1111.0
+@aws-sdk/client-dynamodb@3.1113.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/client-s3@3.1111.0
+@aws-sdk/client-s3@3.1113.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -188,7 +188,7 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/lib-dynamodb@3.1111.0
+@aws-sdk/lib-dynamodb@3.1113.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -212,7 +212,7 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE (inherited from @aws-sdk/checksums@3.1000.28)
 
-@aws-sdk/s3-request-presigner@3.1111.0
+@aws-sdk/s3-request-presigner@3.1113.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -248,11 +248,11 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws/cloudformation-validate@1.7.0-beta
+@aws/cloudformation-validate@1.9.0-beta
   Declared license: Apache-2.0
   Source: https://github.com/aws-cloudformation/cloudformation-validate
   Author metadata: Amazon Web Services — https://aws.amazon.com
-  Resolved license documents: LICENSE
+  Resolved license documents: LICENSE, NOTICE
 
 @aws/lambda-invoke-store@0.3.0
   Declared license: Apache-2.0
@@ -474,7 +474,7 @@ PACKAGE INVENTORY
   Source: https://github.com/DefinitelyTyped/DefinitelyTyped.git
   Resolved license documents: LICENSE
 
-@types/node@24.13.3
+@types/node@24.13.5
   Declared license: MIT
   Source: https://github.com/DefinitelyTyped/DefinitelyTyped.git
   Resolved license documents: LICENSE
@@ -546,13 +546,13 @@ asynckit@0.4.0
   Author metadata: Alex Indigo <iam@alexindigo.com>
   Resolved license documents: LICENSE
 
-aws-cdk@2.1136.0
+aws-cdk@2.1141.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-cdk-cli
   Author metadata: Amazon Web Services — https://aws.amazon.com
   Resolved license documents: LICENSE, NOTICE
 
-aws-cdk-lib@2.265.0
+aws-cdk-lib@2.270.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-cdk.git
   Author metadata: Amazon Web Services — https://aws.amazon.com
@@ -623,13 +623,13 @@ bowser@2.14.1
   Author metadata: Dustin Diaz <dustin@dustindiaz.com> (http://dustindiaz.com)
   Resolved license documents: LICENSE
 
-brace-expansion@2.1.4
+brace-expansion@2.1.7
   Declared license: MIT
   Source: git://github.com/juliangruber/brace-expansion.git
   Author metadata: Julian Gruber — http://juliangruber.com
   Resolved license documents: LICENSE
 
-brace-expansion@5.0.9
+brace-expansion@5.0.12
   Declared license: MIT
   Source: git+https://github.com/juliangruber/brace-expansion.git
   Resolved license documents: LICENSE
@@ -1416,7 +1416,7 @@ jackspeak@3.4.3
   Author metadata: Isaac Z. Schlueter <i@izs.me>
   Resolved license documents: LICENSE.md
 
-js-yaml@3.15.1
+js-yaml@3.15.2
   Declared license: MIT
   Source: nodeca/js-yaml
   Author metadata: Vladimir Zapparov <dervus.grim@gmail.com>
@@ -1479,7 +1479,7 @@ magic-string@0.30.21
   Author metadata: Rich Harris
   Resolved license documents: LICENSE
 
-markdown-it@14.3.0
+markdown-it@14.3.2
   Declared license: MIT
   Source: markdown-it/markdown-it
   Resolved license documents: LICENSE
@@ -1863,7 +1863,7 @@ sisteransi@1.0.5
   Author metadata: Terkel Gjervig — https://terkel.com
   Resolved license documents: license
 
-source-map-js@1.2.1
+source-map-js@1.2.2
   Declared license: BSD-3-Clause
   Source: 7rulnik/source-map-js
   Author metadata: Valentin 7rulnik Semirulnik <v7rulnik@gmail.com>
@@ -2205,7 +2205,7 @@ Applies to:
   - @aws-cdk/cloud-assembly-api@2.2.6 (LICENSE)
   - @aws-cdk/cloud-assembly-schema@54.18.0 (LICENSE)
   - @pkgjs/parseargs@0.11.0 (LICENSE)
-  - aws-cdk@2.1136.0 (LICENSE)
+  - aws-cdk@2.1141.0 (LICENSE)
   - b4a@1.8.1 (LICENSE)
   - bare-events@2.9.1 (LICENSE)
   - bare-fs@4.7.4 (LICENSE)
@@ -2489,7 +2489,7 @@ Applies to:
   - @aws-sdk/credential-provider-web-identity@3.972.75 (LICENSE)
   - @aws-sdk/middleware-sdk-s3@3.972.74 (LICENSE)
   - @aws-sdk/nested-clients@3.997.43 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
-  - @aws-sdk/s3-request-presigner@3.1111.0 (LICENSE)
+  - @aws-sdk/s3-request-presigner@3.1113.0 (LICENSE)
   - @aws-sdk/signature-v4-multi-region@3.996.45 (LICENSE)
   - @smithy/core@3.33.2 (LICENSE)
   - @smithy/types@4.17.2 (LICENSE)
@@ -2699,13 +2699,13 @@ Apache License
 ================================================================================
 Document SHA-256: b659ef9e3ce8fe45329e05916c9c8bb98b436a16f4d4730a8946eec83e3950fe
 Applies to:
-  - @aws-sdk/client-dynamodb@3.1111.0 (LICENSE)
-  - @aws-sdk/client-s3@3.1111.0 (LICENSE)
+  - @aws-sdk/client-dynamodb@3.1113.0 (LICENSE)
+  - @aws-sdk/client-s3@3.1113.0 (LICENSE)
   - @aws-sdk/credential-provider-env@3.972.69 (LICENSE)
   - @aws-sdk/credential-provider-ini@3.973.14 (LICENSE)
   - @aws-sdk/credential-provider-node@3.972.80 (LICENSE)
   - @aws-sdk/dynamodb-codec@3.973.43 (LICENSE)
-  - @aws-sdk/lib-dynamodb@3.1111.0 (LICENSE)
+  - @aws-sdk/lib-dynamodb@3.1113.0 (LICENSE)
   - @aws-sdk/middleware-endpoint-discovery@3.972.29 (LICENSE)
   - @aws-sdk/token-providers@3.1111.0 (LICENSE)
   - @aws-sdk/types@3.974.4 (LICENSE)
@@ -3335,7 +3335,7 @@ Apache License
 ================================================================================
 Document SHA-256: 81932e77fef4cec306da54caf7d4d221dfd0f6fb6da214c712e36cb95ac47906
 Applies to:
-  - @aws/cloudformation-validate@1.7.0-beta (LICENSE)
+  - @aws/cloudformation-validate@1.9.0-beta (LICENSE)
   - @aws/lambda-invoke-store@0.3.0 (LICENSE)
 --------------------------------------------------------------------------------
 Apache License
@@ -3512,6 +3512,20 @@ Apache License
       defend, and hold each Contributor harmless for any liability
       incurred by, or claims asserted against, such Contributor by reason
       of your accepting any such warranty or additional liability.
+
+================================================================================
+Document SHA-256: a37312b3c271f8c5a9273b2a0807931464f6952e92be28a876a40403a7d91bae
+Applies to:
+  - @aws/cloudformation-validate@1.9.0-beta (NOTICE)
+--------------------------------------------------------------------------------
+AWS CloudFormation Validate
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+This product includes software developed at
+Amazon Web Services (https://aws.amazon.com/).
+
+This software includes components licensed under various open source licenses.
+You can find a full list of third-party licenses in the THIRD-PARTY-LICENSES.txt file included with this distribution.
 
 ================================================================================
 Document SHA-256: bc13fb6fc5ffc9b0061571d26d29f8b8602b43456cd90e6db2baa5a2d5b920b9
@@ -4764,7 +4778,7 @@ Applies to:
   - @types/linkify-it@5.0.0 (LICENSE)
   - @types/markdown-it@14.1.2 (LICENSE)
   - @types/mdurl@2.0.0 (LICENSE)
-  - @types/node@24.13.3 (LICENSE)
+  - @types/node@24.13.5 (LICENSE)
   - @types/resolve@1.20.2 (LICENSE)
 --------------------------------------------------------------------------------
 MIT License
@@ -5715,7 +5729,7 @@ SOFTWARE.
 ================================================================================
 Document SHA-256: ff5cce2f59c3b65bbf3c94ea5775f0dc44c00051af5ff1aff9229e1babfd9256
 Applies to:
-  - aws-cdk-lib@2.265.0 (LICENSE)
+  - aws-cdk-lib@2.270.0 (LICENSE)
 --------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -5922,7 +5936,7 @@ Apache License
 ================================================================================
 Document SHA-256: b121e0ddcfa80ab62791a3f09c993f342d909195da883b5fdb61f42607ca80bc
 Applies to:
-  - aws-cdk-lib@2.265.0 (NOTICE)
+  - aws-cdk-lib@2.270.0 (NOTICE)
 --------------------------------------------------------------------------------
 AWS Cloud Development Kit (AWS CDK)
 Copyright 2018-2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -6344,7 +6358,7 @@ Copyright 2016 The Kubernetes Authors All Rights Reserved
 ================================================================================
 Document SHA-256: f52d846c0f6d5dc33fd85570e74dfc2306d284b775130d4974d1739b765b0b4d
 Applies to:
-  - aws-cdk@2.1136.0 (NOTICE)
+  - aws-cdk@2.1141.0 (NOTICE)
 --------------------------------------------------------------------------------
 AWS Cloud Development Kit (AWS CDK)
 Copyright 2018-2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -6556,7 +6570,7 @@ Original Author, when distributed with the Software.
 ================================================================================
 Document SHA-256: 68f12f6e2c33688699249c01d8f9623c534da20aa71989c57b061b7bc1676d14
 Applies to:
-  - brace-expansion@2.1.4 (LICENSE)
+  - brace-expansion@2.1.7 (LICENSE)
 --------------------------------------------------------------------------------
 MIT License
 
@@ -6583,7 +6597,7 @@ SOFTWARE.
 ================================================================================
 Document SHA-256: 9c63a23124d68cd30cd316a94a1a0bca34f032786df6df69fc4b5f136bac8d2e
 Applies to:
-  - brace-expansion@5.0.9 (LICENSE)
+  - brace-expansion@5.0.12 (LICENSE)
 --------------------------------------------------------------------------------
 MIT License
 
@@ -8794,7 +8808,7 @@ software or this license, under any kind of legal claim._**
 ================================================================================
 Document SHA-256: a07bc24468b9654ce76a547d47a2db282d07733b715db4c73a98bd63961f9550
 Applies to:
-  - js-yaml@3.15.1 (LICENSE)
+  - js-yaml@3.15.2 (LICENSE)
 --------------------------------------------------------------------------------
 (The MIT License)
 
@@ -9752,7 +9766,7 @@ For more information, please refer to <http://unlicense.org/>
 ================================================================================
 Document SHA-256: 792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473
 Applies to:
-  - markdown-it@14.3.0 (LICENSE)
+  - markdown-it@14.3.2 (LICENSE)
 --------------------------------------------------------------------------------
 Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.
 
@@ -11103,7 +11117,7 @@ SOFTWARE.
 ================================================================================
 Document SHA-256: c9d85a24226fa4dd8c0756961de362cee34f6e9b1d19938bd480239950ad9a93
 Applies to:
-  - source-map-js@1.2.1 (LICENSE)
+  - source-map-js@1.2.2 (LICENSE)
 --------------------------------------------------------------------------------
 Copyright (c) 2009-2011, Mozilla Foundation and contributors
 All rights reserved.
