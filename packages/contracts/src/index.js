@@ -1,5 +1,7 @@
 // @ts-check
 
+export * from "./workspace-contracts.js";
+
 export const appName = "Team Spaces";
 
 export class ContractValidationError extends Error {
