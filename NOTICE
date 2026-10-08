@@ -52,3 +52,13 @@ Do not edit generated notices directly. After changing dependencies, run
 `npm run licenses:update`, review the result, and commit it with the lockfile.
 The normal `npm run audit:licenses` command fails when any generated license
 artifact is missing or stale.
+
+Shared ecosystem contract source
+--------------------------------
+
+Copyright 2026 categori.se.
+
+Licensed under the Apache License, Version 2.0.
+Application-specific services, credentials, customer data and private operating configuration are outside these shared source releases.
+
+Source: https://github.com/categori-se/app-workspace-contracts/tree/b2dd6f02d5588dd0f4a603901150e23ca29857d4
