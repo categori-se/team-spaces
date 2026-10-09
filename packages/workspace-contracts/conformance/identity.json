@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract": "@categori/workspace-contracts",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "evaluation_time": "2026-10-05T12:00:00Z",
   "cases": [
     {

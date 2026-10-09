@@ -182,3 +182,7 @@ server-owned project creation consume this contract. Unscoped legacy Workspace
 projects retain their unknown scope; they cannot acquire business associations
 until their owning workspace is explicit. Full organization/client lifecycle,
 collection contracts and cross-app identity mappings remain to implement.
+
+## Resource pools
+
+The `./resource-pools` export validates explicit Account/workspace capacity, sponsorship, periods and units. `assertPoolAllocation` validates a Project, Team or Collection allocation without granting resource permission. `proposePoolReservation` returns a revisioned reservation proposal; an owning writer must commit it atomically with an idempotent request receipt and implement release/settlement. The pure contract supplies no persistence or cross-Project accounting service. Strategy slots, storage bytes, compute milliseconds, delivery bytes, AI cost and experiment capital remain separate pool types.

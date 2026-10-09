@@ -1,6 +1,6 @@
 {
   "name": "@categori/workspace-contracts",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "description": "Provider-neutral contracts for self-owned data workspaces, collaboration, and source provenance.",
   "type": "module",
   "private": true,
@@ -27,7 +27,8 @@
     "./documents": "./src/documents.js",
     "./schemas/documents.schema.json": "./schemas/documents.schema.json",
     "./schemas/identity.schema.json": "./schemas/identity.schema.json",
-    "./conformance/identity.json": "./conformance/identity.json"
+    "./conformance/identity.json": "./conformance/identity.json",
+    "./resource-pools": "./src/resource-pools.js"
   },
   "files": [
     "src",

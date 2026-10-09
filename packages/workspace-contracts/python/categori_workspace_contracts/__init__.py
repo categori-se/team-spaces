@@ -10,4 +10,4 @@ from .identity import (
     create_workspace_participation, assert_collaboration_resource, assert_resource_grant,
 )
 
-__version__ = "0.1.0-alpha.9"
+__version__ = "0.1.0-alpha.10"
