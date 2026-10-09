@@ -7,6 +7,6 @@
     ".": "./src/index.js"
   },
   "dependencies": {
-    "@categori/workspace-contracts": "0.1.0-alpha.9"
+    "@categori/workspace-contracts": "0.1.0-alpha.10"
   }
 }

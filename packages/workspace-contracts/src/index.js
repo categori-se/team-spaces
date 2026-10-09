@@ -87,7 +87,7 @@ export {
   validateResourceReference
 } from "./interoperability.js";
 
-export const workspaceContractsVersion = "0.1.0-alpha.9";
+export const workspaceContractsVersion = "0.1.0-alpha.10";
 
 export {assertPreservedRecord, validatePreservedRecord} from "./preservation.js";
 
@@ -150,3 +150,5 @@ export {collectionSchemaVersion, collectionEntryLimit, validateCollectionDefinit
 
 export {assertDocumentVersionLink, documentVersionKey, verifyDocumentVersionBytes,
   documentVersionChunkBytes, documentVersionMaxBytes} from "./documents.js";
+
+export {resourcePoolKinds, assertResourcePool, assertPoolAllocation, proposePoolReservation} from "./resource-pools.js";
