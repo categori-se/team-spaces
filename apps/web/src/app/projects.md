@@ -17,6 +17,9 @@ const params = new URLSearchParams(location.search);
 const search = params.get("search") ?? "";
 const health = params.get("health") ?? "";
 const status = params.get("status") ?? "";
+const archived = params.get("archived") ?? "";
+const template = params.get("template") ?? "";
+const favorite = params.get("favorite") ?? "";
 const view = params.get("view") ?? "grid";
 ```
 
@@ -24,7 +27,7 @@ const view = params.get("view") ?? "grid";
 const result = await Promise.all([
   client.bootstrap({signal: invalidation}),
   client.memberships.list({signal: invalidation}),
-  client.projects.list({search, health, status, signal: invalidation}),
+  client.projects.list({search, health, status, archived, template, favorite, signal: invalidation}),
   client.planning.dashboard({signal: invalidation})
 ]).catch((error) => error);
 ```
@@ -45,13 +48,13 @@ if (result instanceof Error) {
       buttonLink("New task", "#new-task")
     ]
   }));
-  display(actionPanel("Filter projects", projectFilterForm({search, health, status}), {id: "filters", open: Boolean(search || health || status), meta: "Search, health, and status"}));
+  display(actionPanel("Filter projects", projectFilterForm({search, health, status, archived, template, favorite}), {id: "filters", open: Boolean(search || health || status || archived || template || favorite), meta: "Search, lifecycle, templates, favorites"}));
   display(projectListWorkbench(projects, {portfolios: bootstrap.portfolios}, {view}));
   display(toolbar([
     actionPanel("New project", createProjectForm(client, projectData, {onSaved: refreshPage}), {id: "new-project", meta: "Name, owner, portfolio, health"}),
-    actionPanel("Create task", taskCreatePanel(client, bootstrap.projects, {onSaved: refreshPage, memberships: memberships.items, workItems: planning.items, id: ""}), {id: "new-task", meta: "Project, owner, dates, notes"}),
+    actionPanel("Create task", taskCreatePanel(client, bootstrap.projects, {onSaved: refreshPage, memberships: memberships.items, workItems: planning.items, capabilities: bootstrap.capabilities, id: ""}), {id: "new-task", meta: "Project, owner, dates, notes, configured fields"}),
     actionPanel("Templates", projectTemplateGallery(client, projectData, {onSaved: refreshPage}), {meta: "Issue, launch, onboarding"}),
-    savedViewForm(client, "projects", {search, health, status}),
+    savedViewForm(client, "projects", {search, health, status, archived, template, favorite}),
     csvExportButton("projects.csv", projects)
   ]));
 }

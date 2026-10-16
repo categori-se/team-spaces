@@ -19,3 +19,17 @@ test("Observable config embeds an explicit local API and web port pair", async (
     else process.env.WEB_PORT = previousWebPort;
   }
 });
+
+test("real program mode requires local authentication and disables the shared demo", async () => {
+  const previousManifest = process.env.TEAMSPACES_PROGRAM_MANIFEST;
+  process.env.TEAMSPACES_PROGRAM_MANIFEST = "/tmp/private-program.json";
+  try {
+    const {default: config} = await import(new URL(`../observablehq.config.js?program=${Date.now()}`, import.meta.url).href);
+    assert.match(config.head, /"authMode":"local"/);
+    assert.match(config.head, /"publicDemo":\{"enabled":false/);
+    assert.doesNotMatch(config.head, /private-program|access_token|accessKey/);
+  } finally {
+    if (previousManifest === undefined) delete process.env.TEAMSPACES_PROGRAM_MANIFEST;
+    else process.env.TEAMSPACES_PROGRAM_MANIFEST = previousManifest;
+  }
+});

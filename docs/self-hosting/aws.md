@@ -82,10 +82,40 @@ The installer also accepts optional identity settings without binding the reposi
 | `TEAMSPACES_WORK_INDEX_READY` | `false` | Enables the scalable reader only after migration verification. |
 | `TEAMSPACES_ENABLE_PITR` | `false` | Protects the application table with size-priced point-in-time recovery. |
 | `TEAMSPACES_ENABLE_OPERATIONS` | `false` | Adds four core alarms, SNS email, and a tagged application Budget; requires `TEAMSPACES_BUDGET_EMAIL`. |
+| `TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS` | `false` | Adds a one-concurrency hourly digest worker, EventBridge schedule, and retained DLQ for configured per-user daily/weekly gateway delivery. |
 | `TEAMSPACES_ENABLE_PUBLIC_DEMO` | `false` | Adds the isolated anonymous showcase table/API/reset lane; ordinary private teams should leave it off. |
 | `TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME` | none | Optional distinct browser origin for an enabled public demo. The certificate must cover both exact hostnames. |
 | `TEAMSPACES_BUDGET_EMAIL` | none | Required notification address when operations are enabled. |
 | `TEAMSPACES_ALLOW_LOCAL_DEVELOPMENT_ORIGINS` | `false` | Adds localhost OAuth callbacks, API CORS, and CSP access for deliberate deployed-backend testing; leave off in normal installations. |
+| `TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME` | none | AWS Secrets Manager secret containing the JSON credential bundle referenced by LDAP and provider connector configuration. |
+| `TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID` | none | Adds a one-concurrency hourly worker for connector `managedResources` permission reconciliation in this exact workspace; requires the credential secret. |
+| `TEAMSPACES_LDAP_WORKSPACE_ID` | none | Enables direct LDAP login plus the hourly LDAP reconciliation worker for this exact workspace; requires the credential secret. |
+| `TEAMSPACES_LDAP_LOGIN_LABEL` | `Organization directory` | User-facing label for the optional direct-LDAP sign-in path. |
+
+The CDK stack also accepts identity contexts for deployments that call CDK directly or wrap the generic profile:
+
+| CDK context | Default | Purpose |
+| --- | --- | --- |
+| `mfaMode` | `optional` | `off`, `optional`, or `required` software-token MFA for a stack-created Cognito pool. |
+| `existingUserPoolId` | none | Import an operator-managed Cognito pool instead of creating one. |
+| `identityProviderNames` | none | Comma-separated existing OIDC, SAML, or LDAP-bridge provider names exposed to this app client; requires `existingUserPoolId`. |
+| `cognitoDomainUrl` | none | Reachable Hosted UI/Managed Login base URL required with an imported pool unless the hosted prefix settings resolve it. |
+
+Register and verify external providers in Cognito before synthesis, and keep provider secrets/certificates in the operator identity account or secret store. Workspace capability configuration may describe the organizational provider policy, but it never creates Cognito providers or stores their client secrets.
+
+### Provider and LDAP credentials
+
+Maintained provider adapters and direct LDAP are opt-in. Put one JSON object in the Secrets Manager value named by `TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME`; each top-level key is the `credentialReference` or `bindCredentialReference` stored in workspace capabilities. For example:
+
+```json
+{
+  "ldap-primary": {"bindDn": "cn=reader,dc=example,dc=test", "bindPassword": "replace", "sessionSigningKey": "replace-with-at-least-32-random-bytes", "caCertificate": "-----BEGIN CERTIFICATE-----..."},
+  "github-main": {"accessToken": "replace", "webhookSecret": "replace"},
+  "nextcloud-hub": {"username": "service-account", "appPassword": "replace", "clientId": "team-spaces", "clientSecret": "replace", "webhookSecret": "replace", "inboundToken": "replace"}
+}
+```
+
+The deployment resolves that bundle into the bounded API and LDAP-worker environments; after rotating the secret, redeploy so those environments receive the new version. Never paste credential values into the capabilities editor. Configure only public HTTPS provider endpoints, external reference names, project allowlists, and managed-permission boundaries there. Direct LDAP login uses a service lookup followed by a user bind over `ldaps://`; the password is transient. Use an imported Cognito LDAP bridge when the same directory users must pass the Cognito software-token MFA policy.
 
 The community command intentionally uses generated S3 bucket names and creates a dedicated Cognito pool instead of importing another application's pool.
 
@@ -176,7 +206,7 @@ aws cognito-idp admin-create-user \
 
 Sign in through the application and complete Cognito's temporary-password flow. On first authenticated bootstrap, Team Spaces creates that user a personal workspace and an administrator membership scoped to that workspace. This is not a global operator role. Create a team or client workspace in the application and add other members deliberately.
 
-The installation-owned pool permits software-token MFA and disables SMS as a second factor. Enroll and require MFA according to your organization policy before adding sensitive production data; Team Spaces does not provision SMS delivery or a paid messaging dependency for the baseline.
+The installation-owned pool permits software-token MFA and disables SMS as a second factor. The default is optional enrollment; set CDK context `mfaMode=required` before the first deployment when organizational policy requires every user to enroll. Changing an established pool's MFA policy affects every app client that uses that pool, so review imported-pool changes separately. Team Spaces does not provision SMS delivery or a paid messaging dependency for the baseline.
 
 At present there is no one-command owner invitation, cross-workspace super-administrator, or automated break-glass membership repair. Account-level Cognito access and an audited DynamoDB repair remain the operator recovery boundary; see [the operations runbook](../operations-runbook.md#cognito-administrator-recovery).
 
@@ -293,6 +323,6 @@ Inspect retained resources by exact physical name and tag before deciding whethe
 - A new Cognito pool requires a user-subject remapping migration that is not yet automated.
 - A new attachment bucket requires an inventory and document VersionId rewrite that is not yet automated.
 - Point-in-time failover and CDK reconciliation are documented operator procedures, not automatic recovery.
-- Search clusters, malware scanning, real-time collaboration, email delivery, and external integrations are optional future cost gates rather than baseline dependencies.
+- Search clusters and WebSocket/offline-CRDT transports are not baseline dependencies; the request-driven editor already converges through bounded operational transforms and live pull synchronization. Malware callbacks, digest/email gateways, identity providers, and external connectors remain optional operator-configured integrations with their own credentials, network, and usage costs.
 
 These limitations should remain explicit. A self-hosted installation is the complete product core, but its owner is responsible for AWS credentials, DNS, identity administration, monitoring choices, backups, upgrades, incident response, and the resulting AWS charges.

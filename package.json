@@ -28,9 +28,9 @@
     "format:check": "node scripts/check-format.mjs",
     "lint": "node scripts/lint.mjs",
     "typecheck": "tsc -p jsconfig.json --noEmit",
-    "test": "node --test",
-    "test:integration": "node --test services/api/test/*.test.js",
-    "test:infra": "node --test infra/test/*.test.js",
+    "test": "node --test --test-concurrency=1",
+    "test:integration": "node --test --test-concurrency=1 services/api/test/*.test.js",
+    "test:infra": "node --test --test-concurrency=1 infra/test/*.test.js",
     "build": "npm run build -w @teamspaces/api && npm run build -w @teamspaces/web",
     "infra:synth": "npm run infra:synth:aws",
     "infra:synth:aws": "node scripts/deploy-community.mjs --synth",
@@ -57,7 +57,8 @@
     "@observablehq/framework": "^1.13.4",
     "@observablehq/plot": "^0.6.17",
     "aws-cdk-lib": "file:vendor/aws-cdk-lib-2.270.0-teamspaces.1.tgz",
-    "constructs": "^10.8.1"
+    "constructs": "^10.8.1",
+    "@aws-sdk/client-lambda": "^3.1113.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.5",

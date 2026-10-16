@@ -126,61 +126,67 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
+@aws-sdk/client-lambda@3.1152.0
+  Declared license: Apache-2.0
+  Source: https://github.com/aws/aws-sdk-js-v3.git
+  Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
+  Resolved license documents: LICENSE
+
 @aws-sdk/client-s3@3.1113.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/core@3.977.8
+@aws-sdk/core@3.978.3
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-env@3.972.69
+@aws-sdk/credential-provider-env@3.972.74
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-http@3.972.71
+@aws-sdk/credential-provider-http@3.972.76
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE (inherited from @aws-sdk/checksums@3.1000.28)
 
-@aws-sdk/credential-provider-ini@3.973.14
+@aws-sdk/credential-provider-ini@3.973.19
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-login@3.972.76
+@aws-sdk/credential-provider-login@3.972.81
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE (inherited from @aws-sdk/checksums@3.1000.28)
 
-@aws-sdk/credential-provider-node@3.972.80
+@aws-sdk/credential-provider-node@3.972.86
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-process@3.972.69
+@aws-sdk/credential-provider-process@3.972.74
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-sso@3.973.13
+@aws-sdk/credential-provider-sso@3.973.18
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/credential-provider-web-identity@3.972.75
+@aws-sdk/credential-provider-web-identity@3.972.80
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -216,7 +222,7 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/nested-clients@3.997.43
+@aws-sdk/nested-clients@3.997.48
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -228,19 +234,19 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/signature-v4-multi-region@3.996.45
+@aws-sdk/signature-v4-multi-region@3.996.48
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/token-providers@3.1111.0
+@aws-sdk/token-providers@3.1150.0
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/types@3.974.4
+@aws-sdk/types@3.974.6
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -252,7 +258,7 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@aws-sdk/xml-builder@3.972.39
+@aws-sdk/xml-builder@3.972.41
   Declared license: Apache-2.0
   Source: https://github.com/aws/aws-sdk-js-v3.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
@@ -428,7 +434,7 @@ PACKAGE INVENTORY
   Author metadata: Sindre Sorhus — https://sindresorhus.com
   Resolved license documents: license
 
-@smithy/core@3.33.2
+@smithy/core@3.36.0
   Declared license: Apache-2.0
   Source: https://github.com/smithy-lang/smithy-typescript.git
   Author metadata: AWS Smithy Team — https://smithy.io
@@ -440,25 +446,25 @@ PACKAGE INVENTORY
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@smithy/fetch-http-handler@5.7.2
+@smithy/fetch-http-handler@5.8.0
   Declared license: Apache-2.0
   Source: https://github.com/smithy-lang/smithy-typescript.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@smithy/node-http-handler@4.11.2
+@smithy/node-http-handler@4.12.1
   Declared license: Apache-2.0
   Source: https://github.com/smithy-lang/smithy-typescript.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@smithy/signature-v4@5.7.2
+@smithy/signature-v4@5.7.4
   Declared license: Apache-2.0
   Source: https://github.com/smithy-lang/smithy-typescript.git
   Author metadata: AWS SDK for JavaScript Team — https://aws.amazon.com/sdk-for-javascript/
   Resolved license documents: LICENSE
 
-@smithy/types@4.17.2
+@smithy/types@4.19.0
   Declared license: Apache-2.0
   Source: https://github.com/smithy-lang/smithy-typescript.git
   Author metadata: AWS Smithy Team — https://smithy.io
@@ -2492,17 +2498,17 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 Document SHA-256: 84d995af201d926f392ce5d01cacdf17b054a2bfb0ca859e1d450d1af09d5635
 Applies to:
   - @aws-sdk/checksums@3.1000.28 (LICENSE)
-  - @aws-sdk/credential-provider-http@3.972.71 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
-  - @aws-sdk/credential-provider-login@3.972.76 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
-  - @aws-sdk/credential-provider-process@3.972.69 (LICENSE)
-  - @aws-sdk/credential-provider-sso@3.973.13 (LICENSE)
-  - @aws-sdk/credential-provider-web-identity@3.972.75 (LICENSE)
+  - @aws-sdk/credential-provider-http@3.972.76 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
+  - @aws-sdk/credential-provider-login@3.972.81 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
+  - @aws-sdk/credential-provider-process@3.972.74 (LICENSE)
+  - @aws-sdk/credential-provider-sso@3.973.18 (LICENSE)
+  - @aws-sdk/credential-provider-web-identity@3.972.80 (LICENSE)
   - @aws-sdk/middleware-sdk-s3@3.972.74 (LICENSE)
-  - @aws-sdk/nested-clients@3.997.43 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
+  - @aws-sdk/nested-clients@3.997.48 (LICENSE (inherited from @aws-sdk/checksums@3.1000.28))
   - @aws-sdk/s3-request-presigner@3.1113.0 (LICENSE)
-  - @aws-sdk/signature-v4-multi-region@3.996.45 (LICENSE)
-  - @smithy/core@3.33.2 (LICENSE)
-  - @smithy/types@4.17.2 (LICENSE)
+  - @aws-sdk/signature-v4-multi-region@3.996.48 (LICENSE)
+  - @smithy/core@3.36.0 (LICENSE)
+  - @smithy/types@4.19.0 (LICENSE)
 --------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -2710,21 +2716,22 @@ Apache License
 Document SHA-256: b659ef9e3ce8fe45329e05916c9c8bb98b436a16f4d4730a8946eec83e3950fe
 Applies to:
   - @aws-sdk/client-dynamodb@3.1113.0 (LICENSE)
+  - @aws-sdk/client-lambda@3.1152.0 (LICENSE)
   - @aws-sdk/client-s3@3.1113.0 (LICENSE)
-  - @aws-sdk/credential-provider-env@3.972.69 (LICENSE)
-  - @aws-sdk/credential-provider-ini@3.973.14 (LICENSE)
-  - @aws-sdk/credential-provider-node@3.972.80 (LICENSE)
+  - @aws-sdk/credential-provider-env@3.972.74 (LICENSE)
+  - @aws-sdk/credential-provider-ini@3.973.19 (LICENSE)
+  - @aws-sdk/credential-provider-node@3.972.86 (LICENSE)
   - @aws-sdk/dynamodb-codec@3.973.43 (LICENSE)
   - @aws-sdk/lib-dynamodb@3.1113.0 (LICENSE)
   - @aws-sdk/middleware-endpoint-discovery@3.972.29 (LICENSE)
-  - @aws-sdk/token-providers@3.1111.0 (LICENSE)
-  - @aws-sdk/types@3.974.4 (LICENSE)
+  - @aws-sdk/token-providers@3.1150.0 (LICENSE)
+  - @aws-sdk/types@3.974.6 (LICENSE)
   - @aws-sdk/util-dynamodb@3.996.9 (LICENSE)
-  - @aws-sdk/xml-builder@3.972.39 (LICENSE)
+  - @aws-sdk/xml-builder@3.972.41 (LICENSE)
   - @smithy/credential-provider-imds@4.5.2 (LICENSE)
-  - @smithy/fetch-http-handler@5.7.2 (LICENSE)
-  - @smithy/node-http-handler@4.11.2 (LICENSE)
-  - @smithy/signature-v4@5.7.2 (LICENSE)
+  - @smithy/fetch-http-handler@5.8.0 (LICENSE)
+  - @smithy/node-http-handler@4.12.1 (LICENSE)
+  - @smithy/signature-v4@5.7.4 (LICENSE)
 --------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -2931,7 +2938,7 @@ Apache License
 ================================================================================
 Document SHA-256: 4186c3f89c23f27b4c0caab574737c49ee5137c36a3c103484feaca4aeec2310
 Applies to:
-  - @aws-sdk/core@3.977.8 (LICENSE)
+  - @aws-sdk/core@3.978.3 (LICENSE)
 --------------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004

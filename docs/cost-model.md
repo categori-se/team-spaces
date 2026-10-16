@@ -12,6 +12,7 @@ The light-installation target is less than $5/month for application infrastructu
 | --- | --- |
 | Community core (generic default) | One on-demand application table; ARM Lambda; HTTP API; CloudFront; private S3; Cognito Lite; finite logs. Public demo, metric alarms/SNS, application budget, and PITR are off. |
 | Production operations | Enables PITR and focused alarms; a notification-only tagged budget and SNS email are created when an address is supplied. These controls improve recovery and response but can add stored-byte or shared-allowance cost. |
+| Scheduled notification summaries | Independently adds one hourly Scheduler invocation, one one-concurrency ARM worker, and a retained DLQ. Delivery traffic is paid by the operator-selected email gateway. |
 | Hosted showcase | Adds the isolated public-demo table/API/reset lane and its operations alarms. An optional demo hostname is a second alias on the existing CloudFront distribution, not a second distribution or service. The showcase remains request-priced but intentionally creates more resources and scheduled activity than a private team needs. |
 
 The generic installer selects the community profile explicitly. A service operator can select the production and hosted-showcase options. Retained S3/DynamoDB data, CloudFormation/CDK assets, DNS, certificate-related external services, and traffic remain the operator's responsibility in every profile.
@@ -32,6 +33,7 @@ Assumptions: us-east-1, production operations enabled, about 50 direct Cognito u
 | CloudWatch | Short-retention logs and ten focused alarm metrics; shared allowances may cover the pilot | $0.00-$1.00 |
 | AWS Budgets | One notification-only application budget is within the current free budget allowance | $0.00 |
 | Public demo reset | Two small ARM Lambdas, a disposable on-demand table, one daily Scheduler invocation, and a small DLQ; no provisioned or always-on compute | normally pennies and comfortably below $1 at 100,000 demo calls |
+| Scheduled notification summaries | One hourly Scheduler invocation, sparse DynamoDB reads/writes, one scale-to-zero ARM worker, and a small DLQ; external gateway charges are separate | normally pennies at the stated 50-user envelope |
 | DNS | Operator-managed DNS is outside this stack | account-specific |
 
 Expected light-use application total: roughly **$0.50-$3/month**, with a **$5/month guardrail target**. AWS free allowances are shared across an account or organization and may already be consumed, so zero-dollar rows must not be assumed during forecasting.
@@ -52,7 +54,7 @@ At the 32 KiB response ceiling, a route sustained continuously at 2 requests/sec
 
 No standalone WAF is added for the demo: pay-as-you-go WAF would reintroduce a fixed web-ACL/rule floor that can exceed the rest of this application. CloudFront's $0 Free flat-rate plan may provide bundled WAF and a delivery cost ceiling, but enrollment and configuration compatibility must be reviewed separately rather than silently changed by this stack.
 
-One-time meetings use the existing HTTP API, ARM Lambda, DynamoDB table, GSI1, and table TTL. They add storage and request units only when meetings are created, read, or changed; creates transactionally write the meeting and activity plus a replay claim that becomes TTL-cleanup eligible after 24 hours when keyed, while patches write the meeting and activity. Serialized meeting content is capped at 32 KiB so even the duplicated keyed-create payload retains headroom below the default 200-WRU table/GSI ceilings. This write amplification is request-driven and bounded, with no meeting-specific idle charge. Recurring-series generation, invitations, and reminders remain disabled until their EventBridge Scheduler/queue/SES behavior is implemented and separately cost-gated.
+One-time meetings use the existing HTTP API, ARM Lambda, DynamoDB table, GSI1, and table TTL. They add storage and request units only when meetings are created, read, or changed; creates transactionally write the meeting and activity plus a replay claim that becomes TTL-cleanup eligible after 24 hours when keyed, while patches write the meeting and activity. Serialized meeting content is capped at 32 KiB so even the duplicated keyed-create payload retains headroom below the default 200-WRU table/GSI ceilings. This write amplification is request-driven and bounded, with no meeting-specific idle charge. Meeting-specific invitation dispatch remains an operator gateway concern; notification summaries and date alerts use the independently enabled worker described above.
 
 ## Implemented cost controls
 
@@ -72,15 +74,15 @@ Capability additions follow these defaults:
 
 | Capability | Default serverless implementation | Cost rule |
 | --- | --- | --- |
-| Notifications, projections, imports, exports, webhooks | DynamoDB Streams/S3 events -> SQS/DLQ -> Lambda | Pay per event; cap worker concurrency and batch writes |
-| Reminders, recurring meetings, date alerts, digests | EventBridge Scheduler -> queue/worker | Pay per invocation; delete completed schedules |
-| Email | Durable in-app notification first, SES digest by default | Per-recipient; no dedicated IP or always-on mail service |
+| Notifications, projections, imports, exports, webhooks | Direct bounded writes/requests; optional workers only for measured lanes | Pay per request; cap worker concurrency and batches |
+| Date alerts and daily/weekly digests | One hourly EventBridge Scheduler -> indexed Lambda worker with period claims and DLQ | Independently enabled; five-recipient batches and one concurrency |
+| Email | Durable in-app notification first, operator-configured HTTPS delivery gateway | Per-recipient gateway charges; no dedicated IP or always-on mail service |
 | Metadata/rich-text search | Bounded DynamoDB token/prefix projections | Included in normal request/storage use |
 | Attachment-content full text | Optional scale-to-zero search pipeline | Enable only with a named budget and measured need; active search compute can exceed the whole pilot budget |
 | Malware scanning | Event-driven, opt-in S3 scanning | Pay per object/GB; quarantine until a clean result |
-| Live collaboration | API Gateway WebSocket + Lambda/DynamoDB operation log | Pay per message/connection minute; enable per account/module |
+| Live collaboration | Existing HTTP API/Lambda plus bounded revision reads, transactional DynamoDB writes, 1.2-second autosave, and 2.5-second active-editor pull sync | No idle compute or connection-minute floor; each active editor pays for bounded requests, at most 100 revision reads per stale merge, and a three-item transaction per saved change |
 | BIM | Client-side IFC viewing where practical; event-driven conversion only when required | Store models in S3 and cap conversion concurrency |
-| External integrations | Queue-backed connector workers | No polling faster than necessary; honor provider and AWS budgets |
+| External integrations | Authenticated bounded requests plus provider-driven callbacks; optional hourly LDAP and explicitly managed-resource workers | No broad provider polling; one concurrency per optional worker, at most 50 managed resources, capped directory results, and provider/AWS budgets |
 
 Aurora, OpenSearch, ECS, EKS, EC2, NAT gateways, and provisioned concurrency are not baseline dependencies. A context-gated service can be introduced only with a measured access pattern, scale-to-zero behavior where available, a rollback path, and an updated monthly estimate.
 

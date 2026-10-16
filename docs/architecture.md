@@ -45,10 +45,10 @@ SQS, Scheduler, Streams, and Lambda remain request-priced and add no always-on h
 ## Architecture principles
 
 - **Scale with use:** static files are cached at the edge; APIs, queues, schedules, compute, and DynamoDB are pay-per-use.
-- **Bounded synchronous work:** list APIs use opaque cursors and stable keyset ordering. Cross-project screens must migrate from bounded pilot fan-out to workspace projections as their scale-sensitive access paths are implemented.
-- **Direct mutations:** a mutable resource is addressed by its account/project key. Meeting create/update now demonstrate the target pattern: one transaction commits the canonical row with activity, and keyed creates also commit a TTL replay claim. Conditional writes already protect task and project versions; extending the same transaction/idempotency envelope to every mutation and projection remains required.
+- **Bounded synchronous work:** high-volume list APIs use opaque cursors and stable keyset ordering. Cross-project work, documents, content, meetings, activity, and search use workspace/project projections or bounded keyed queries rather than per-project fan-out.
+- **Direct mutations:** mutable resources are addressed by account/project keys and protected by optimistic versions. Meeting create/update atomically commit canonical data with activity, keyed meeting creates add a TTL replay claim, and project/work/content/time/planning mutations maintain their required projections.
 - **Explicit cost ceilings:** API rate/burst limits, Lambda reserved concurrency, DynamoDB on-demand maximum throughput, short log retention, and storage lifecycle rules bound ordinary work. Alarm metrics and budgets are optional operator controls rather than core dependencies.
-- **Optional expensive capabilities:** full attachment-content search, malware scanning, real-time collaboration, BIM processing, and external connectors are independently enabled. Core planning never depends on an idle-priced search or relational cluster.
+- **Optional expensive capabilities:** attachment-content extraction, required malware scanning, external connector credentials, email delivery, BIM processing, and any future WebSocket/offline-CRDT transport are independently enabled. Core planning and convergent collaboration never depend on an idle-priced search, socket fleet, or relational cluster.
 
 ## Public Entry Point
 
@@ -78,7 +78,7 @@ The table holds two alternating demo slots. The daily reset Lambda cleans and se
 
 - Workspace records are user-facing accounts. A user can have a private personal account and can create team or client accounts for shared portfolios and projects.
 - Membership records bind users to accounts, store role and status, and may optionally restrict a member to specific projects inside the account.
-- Portfolio, project, task, one-time meeting, time entry, saved view, document, and activity records are application data in DynamoDB.
+- Portfolio, project, task, recurring-capable meeting, planning resource, collaborative content/revision/presence, time entry/timer, saved view, document, integration/share, webhook-delivery, and activity records are application data in DynamoDB.
 - Authenticated document bytes are never stored in DynamoDB; DynamoDB stores metadata and S3 object keys only. The isolated disposable public demo may embed short fictional text previews solely to demonstrate organization without granting S3 access.
 - Activity records are append-only capture events for user-visible mutations and document link generation.
 
@@ -90,14 +90,14 @@ Canonical project, work, and meeting records are stored under stable project key
 
 The workspace work projection has an explicit rollout boundary. New code dual-writes the projection while `TEAMSPACES_WORK_INDEX_READY=false`; cross-project reads retain the legacy path. The scalable reader activates only when both the deployment switch is true and the table contains the verifier-written `SYSTEM#MIGRATION / WORK_INDEX_V1` marker. This prevents a configuration mistake from exposing a partially backfilled index.
 
-Text search starts with bounded token/prefix indexes in DynamoDB for metadata and rich text. Attachment-content indexing is opt-in. A search service may be enabled only when measured usage justifies its non-trivial active-hour cost and it can scale to zero while idle.
+Global search queries bounded workspace projections for project, work, document, collaborative-content, and meeting metadata, then applies permission and folded-text matching. Scanner-extracted attachment text is stored only as an internal index value and removed from every public document response. A dedicated search service may be enabled only when measured usage exceeds this documented envelope and its idle cost and removal path are explicit.
 
 ## Collaboration and scheduling boundary
 
-- Meeting series store recurrence rules; occurrences and reminders are materialized asynchronously.
-- Automatic scheduling runs as a bounded job and writes a versioned proposal before applying date changes. Manual edits remain normal conditional mutations.
-- Rich collaborative editing can add API Gateway WebSocket connections and a Lambda/DynamoDB operation log without changing the static Observable deployment. It is not required for ordinary wiki/document editing.
-- Email is derived from durable in-app notifications. Immediate mail is opt-in; batched digests are the cost-conscious default.
+- Meeting series store bounded recurrence rules; calendar clients consume RRULE exports and notification rules can derive reminders without an always-on meeting process.
+- Automatic scheduling is a bounded request calculation over one authorized project and work calendar, followed by version-checked item updates. Manual edits remain ordinary conditional mutations.
+- Rich wiki/document editing uses immutable revisions, stable change identities, deterministic operational transformation over a bounded 100-revision window, autosave/live pull synchronization, and short presence leases. DynamoDB conditionally commits the canonical body, transformed operation revision, and activity together; a WebSocket transport can be added later without changing convergence semantics or the static Observable deployment.
+- Email is derived from durable in-app notifications and digest payloads. Per-user/global and project-specific preferences are stored on a sparse UTC due-hour index. When enabled, one hourly EventBridge invocation processes five recipients at a time, uses atomic period claims for retry safety, and delivers daily/weekly payloads through an explicitly configured gateway/webhook.
 
 ## Hosted deployment domain
 
@@ -113,7 +113,13 @@ The frontend stores the selected account id locally and sends it as `x-teamspace
 
 ## Authentication
 
-The community profile creates an installation-owned Cognito Lite pool, app client, and prefix domain. Self-sign-up is disabled, and the operator deliberately creates the first user.
+The community profile creates an installation-owned Cognito Lite pool, app client, and prefix domain. Self-sign-up is disabled, the operator deliberately creates the first user, and the `mfaMode` context selects off, optional, or required software-token MFA.
+
+An operator can instead import an existing Cognito pool and name its pre-registered OIDC, SAML, or LDAP-bridge providers through `identityProviderNames`. Provider registration, certificates, and client credentials remain outside tenant records and inside the operator-controlled identity boundary; the app client receives only provider names.
+
+An optional direct-directory lane performs a service lookup and user bind over certificate-verified LDAPS, then issues a short-lived workspace-bound signed session. The browser continues through the same API authorization and membership checks under an LDAP-specific prefix; passwords are never persisted. A separate one-concurrency hourly Lambda queries configured users/groups, preserves manual groups, maps departments and directory status, and disables missing LDAP-managed members. Operators that require Cognito's software-token MFA for directory users use a pre-registered LDAP bridge instead of the direct lane.
+
+Maintained integrations execute inside the bounded API Lambda. Provider endpoints must remain on their configured public HTTPS origin, redirects and responses over one MiB are rejected, credentials are resolved from the operator secret bundle, and callbacks are provider-verified before they receive a service context. GitHub/GitLab and collaboration deliveries use replay claims; Nextcloud/openDesk, Microsoft Graph, and XWiki resource operations remain user/project authorized. There is no always-on integration host or broad provider poller; an optional one-concurrency hourly worker only reconciles explicitly listed managed storage resources.
 
 The optional hosted profile can instead import an existing pool and use Managed Login v2 on an operator-configured Cognito prefix domain. It creates its own app client, applies a browser-adaptive light/dark style to that client, and writes the client id and prefix URL to `runtime-config.json` only after the style exists. A shared custom domain can remain on Hosted UI classic, avoiding a branding-version migration for applications that continue to use it. The prefix version is nevertheless pool-wide and is operational separation rather than a client-isolation boundary. With a custom domain also present, the prefix is used only for the explicit authorize, token, and logout endpoints—not OIDC discovery. Managed Login follows the browser/OS color preference; the separate Cognito origin cannot read the app's local theme override.
 
@@ -123,4 +129,4 @@ CloudFront attaches CSP, HSTS, `X-Content-Type-Options: nosniff`, restrictive re
 
 ## Cost and failure isolation
 
-The HTTP API is throttled before Lambda, the API Lambda has reserved-concurrency limits, and DynamoDB on-demand throughput has explicit maximums. Future background consumers must use separate concurrency and dead-letter queues so imports, email, search indexing, or integrations cannot starve interactive work. See [cost-model.md](cost-model.md) for the light-use envelope and feature cost gates.
+The HTTP API is throttled before Lambda, the API Lambda has reserved-concurrency limits, and DynamoDB on-demand throughput has explicit maximums. Background consumers use separate concurrency and dead-letter queues so notifications, LDAP reconciliation, and managed storage reconciliation cannot starve interactive work; future import or search-index workers must retain that isolation. See [cost-model.md](cost-model.md) for the light-use envelope and feature cost gates.

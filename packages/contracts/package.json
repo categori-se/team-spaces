@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "exports": {
-    ".": "./src/index.js"
-  },
   "dependencies": {
     "@categori/workspace-contracts": "0.1.0-alpha.10"
+  },
+  "exports": {
+    ".": "./src/index.js"
   }
 }
