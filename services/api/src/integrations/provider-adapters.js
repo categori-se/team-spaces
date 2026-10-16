@@ -1,7 +1,7 @@
 // @ts-nocheck
 
-import {createHmac, timingSafeEqual} from "node:crypto";
-import {ServiceUnavailableError, UnauthorizedError, ValidationError} from "../errors.js";
+import {createHash, createHmac, timingSafeEqual} from "node:crypto";
+import {ForbiddenError, ServiceUnavailableError, UnauthorizedError, ValidationError} from "../errors.js";
 import {readGitHubProject} from "./github-projects.js";
 
 const maintainedTypes = new Set(["github", "gitlab", "nextcloud", "onedrive", "sharepoint", "xwiki", "opendesk"]);
@@ -110,12 +110,31 @@ function credentialBag(environment = process.env) {
   }
 }
 
+function canonicalCredentialScope(value) {
+  if (Array.isArray(value)) return value.map(canonicalCredentialScope);
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, canonicalCredentialScope(value[key])]));
+  return value;
+}
+
+/** Server-owned workspace identity plus the complete reviewed connector configuration. */
+export function integrationCredentialBinding(workspaceId, connector) {
+  if (typeof workspaceId !== "string" || !workspaceId || !connector || typeof connector !== "object" || Array.isArray(connector) || typeof connector.id !== "string" || !connector.id) throw new ForbiddenError("Integration credentials require a trusted workspace and connector");
+  const {workspaceId: ignoredWorkspace, ...configuration} = connector;
+  return {workspaceId, connectorId: connector.id, configurationSha256: createHash("sha256").update(JSON.stringify(canonicalCredentialScope(configuration))).digest("hex")};
+}
+
 export function environmentCredentialResolver(environment = process.env) {
-  return async (reference) => {
+  return async (reference, context = {}) => {
     if (!reference) throw new ServiceUnavailableError("The connector has no external credential reference");
     const credential = credentialBag(environment)[reference];
     if (!credential || typeof credential !== "object" || Array.isArray(credential)) throw new ServiceUnavailableError(`External credential reference ${reference} is unavailable`);
-    return structuredClone(credential);
+    const {bindings, ...value} = credential;
+    if (bindings !== undefined) {
+      if (!Array.isArray(bindings) || !bindings.length || bindings.length > 100 || bindings.some(binding => !binding || typeof binding !== "object" || Array.isArray(binding) || typeof binding.workspaceId !== "string" || !binding.workspaceId || typeof binding.connectorId !== "string" || !binding.connectorId || !/^[a-f0-9]{64}$/.test(binding.configurationSha256 ?? ""))) throw new ServiceUnavailableError("The integration credential bindings are invalid");
+      const scope = integrationCredentialBinding(context.workspaceId, context.connector);
+      if (!bindings.some(binding => binding.workspaceId === scope.workspaceId && binding.connectorId === scope.connectorId && binding.configurationSha256 === scope.configurationSha256)) throw new ForbiddenError("This workspace and connector are not permitted to use the integration credential");
+    }
+    return structuredClone(value);
   };
 }
 
@@ -205,7 +224,7 @@ export class ProviderIntegrationRuntime {
   }
 
   async credential(connector) {
-    return this.resolveCredential(requiredConnectorValue(connector, "credentialReference"));
+    return this.resolveCredential(requiredConnectorValue(connector, "credentialReference"), {workspaceId: connector.workspaceId, connector});
   }
 
   async request(url, init = {}) {

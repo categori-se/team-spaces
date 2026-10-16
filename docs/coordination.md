@@ -76,6 +76,23 @@ outcomes, and require fresh approval after conflicts. Define bounded event or
 schedule mechanics before enabling unattended writes. The product's provider
 browser does not itself enable an autonomous GitHub write loop.
 
+## Credential isolation in shared installations
+
+Each hosted credential must include a nonempty `bindings` array prepared by the
+operator with `integrationCredentialBinding(workspaceId, connector)`. A binding
+fixes the server-owned workspace ID, connector ID and SHA-256 of the complete
+reviewed connector configuration. Resolution rejects missing context, another
+workspace, or changed provider destinations, repositories, boards or configuration
+before making a provider request. Repositories overwrite any configured workspace
+field with the authenticated request's workspace identity.
+
+Changing a bound connector requires an operator to review and refresh its binding.
+Bindings live beside the credential in secret storage and are removed before the
+credential reaches a provider adapter. Resolver calls without connector context,
+including attempts to reuse a provider credential for a directory binding, fail.
+Unbound credentials remain supported for trusted single-workspace local setups;
+shared hosted installations must use bound credentials.
+
 ## Local development
 
 The local server supports a private program manifest and durable state directory:

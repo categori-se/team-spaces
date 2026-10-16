@@ -3507,7 +3507,7 @@ export class DynamoRepository {
     const connector = capabilities.connectors?.find((item) => item.id === connectorId);
     if (!connector || connector.enabled === false) throw new ValidationError("Connector is not enabled");
     if (type && connector.type !== type) throw new ValidationError(`Connector must have type ${type}`);
-    return connector;
+    return {...connector, workspaceId: context.workspaceId};
   }
 
   async checkIntegrationHealth(context, connectorId, options = {}) {
