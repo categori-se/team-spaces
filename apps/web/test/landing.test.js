@@ -18,66 +18,16 @@ const destinationPages = {
   "team-workflows": readFileSync(new URL("../src/app/admin.md", import.meta.url), "utf8")
 };
 
-test("landing offers an accessible no-account demo and a distinct real sign-in", () => {
+test("landing represents Team Spaces and routes visitors to project selection", () => {
   assert.match(landing, /^---\ntitle: Team Spaces\nsidebar: false\n---/);
-  assert.match(
-    landing,
-    /<h1><span id="landing-title">Team Spaces<\/span><\/h1>/,
-  );
-  assert.doesNotMatch(landing, /<h1[^>]*id=/);
-  assert.match(landing, /href="\/app#public-demo-entry"[^>]*data-public-demo-link/);
-  assert.match(landing, /<h2><span id="landing-demo-title">Follow the work from focus to follow-up<\/span><\/h2>/);
-  assert.doesNotMatch(landing, /<h2[^>]*id=/);
-  assert.match(landing, /<nav class="landing-tour" aria-label="Explore the public demo">/);
-  const primaryCards = [...landing.matchAll(/<a class="landing-tour__card" href="([^"]+)" data-public-demo-destination="([^"]+)">/g)]
-    .map(([, href, destination]) => ({href, destination}));
-  assert.deepEqual(primaryCards, [
-    {href: "/app#public-demo-entry", destination: "overview"},
-    {href: "/app/planning#public-demo-entry", destination: "planning"},
-    {href: "/app/meetings#public-demo-entry", destination: "meetings"}
-  ]);
-  assert.match(landing, /<nav class="landing-demo__more" aria-label="More public demo areas">\s*<p><small>/);
-  const secondaryDestinations = [
-    ["projects", "/app/projects#public-demo-entry"],
-    ["documents", "/app/documents#public-demo-entry"],
-    ["reports", "/app/reports#public-demo-entry"],
-    ["team-workflows", "/app/admin#public-demo-entry"]
-  ];
-  for (const [destination, href] of secondaryDestinations) {
-    assert.ok(landing.includes(`href="${href}" data-public-demo-destination="${destination}"`));
-  }
-  for (const page of Object.values(destinationPages)) {
-    assert.match(page, /id="public-demo-entry" hidden/);
-  }
-  assert.doesNotMatch(landing, /landing-feature-grid|<article>/);
-  assert.match(landing, /Open Overview/);
-  assert.match(landing, /Open Planning/);
-  assert.match(landing, /Open Meetings/);
-  assert.match(landing, /Documents <span>\(sample previews; file transfers disabled\)<\/span>/);
-  assert.match(landing, /Team &amp; workflows/);
-  assert.match(overviewPage, /id="public-demo-entry"[^>]*hidden/);
-  assert.match(landing, /data-workspace-sign-in>Sign in/);
-  assert.match(landing, /aria-describedby="public-demo-disclosure"/);
-  assert.match(landing, /No account needed/);
-  assert.match(landing, /A demo visitor and four fictional teammates/i);
-  assert.match(landing, /Sam Okafor/);
-  assert.match(landing, /5 people · shared assignments/);
-  assert.match(landing, /assigned work/i);
-  assert.match(landing, /Changes are shared and reset daily/);
-  assert.match(landing, /Do not enter sensitive or personal information/);
+  assert.match(landing, /<h1><span id="landing-title">Team Spaces<\/span><\/h1>/);
+  assert.match(landing, /href="\/projects">Browse public projects/);
+  assert.match(landing, /href="\/app\/projects" data-workspace-sign-in>Sign in to your workspace/);
+  assert.match(landing, /projects, tasks, roadmaps and decisions/);
+  assert.match(landing, /workspaceSignIn.textContent = "Open workspace"/);
   assert.match(landing, /href="LICENSE\.txt" download>Apache 2\.0 license<\/a>/);
-  assert.match(landing, /href="THIRD_PARTY_NOTICES\.txt" download>Third-party software notices<\/a>/);
-  assert.match(landing, /enterPublicDemo/);
   assert.match(landing, /beginSignIn/);
-  assert.match(landing, /currentSession\(\)\.catch/);
-  assert.match(landing, /workspaceSignIn\.remove\(\)/);
-  assert.match(landing, /publicDemoTour\.remove\(\)/);
-  assert.match(landing, /publicDemoDisclosure\.remove\(\)/);
-  assert.match(landing, /landingConfig\.publicDemo\?\.origin/);
-  assert.match(landing, /\[publicDemoLink, \.\.\.publicDemoDestinationLinks\]/);
-  assert.match(landing, /new URL\(link\.getAttribute\("href"\), landingConfig\.publicDemo\.origin\)\.href/);
-  assert.match(landing, /workspaceSignIn\.classList\.remove\("button--ghost"\)/);
-  assert.match(landing, /workspaceSignIn\.classList\.add\("button--primary"\)/);
+  assert.doesNotMatch(landing, /OpenGeo|opengeo|enterPublicDemo|fictional|sample data|data-public-demo/);
 });
 
 test("planning keeps the core workbench prominent and progressively discloses secondary tools", () => {

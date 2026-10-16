@@ -6,7 +6,7 @@ title: Settings
 
 ```js
 import {apiClient} from "../lib/api.js";
-import {accountManagementPanel, actionPanel, activityList, applicationDataSummary, buttonLink, configureWorkTaxonomy, documentsTable, errorView, membershipTable, pageHeader, profileForm, publicDemoTeamOverview, securityManagementPanel, teamManagementPanel, toolbar, viewTabs, workConfigurationEditor, workConfigurationSummary, workspaceTopNav} from "../components/ui.js";
+import {accountManagementPanel, actionPanel, activityList, applicationDataSummary, applyWorkspaceCapabilities, buttonLink, configureWorkTaxonomy, documentsTable, errorView, membershipTable, pageHeader, profileForm, publicDemoTeamOverview, securityManagementPanel, teamManagementPanel, toolbar, viewTabs, workConfigurationEditor, workConfigurationSummary, workspaceCapabilitiesEditor, workspaceCapabilitiesSummary, workspaceTopNav} from "../components/ui.js";
 ```
 
 ```js
@@ -30,14 +30,15 @@ function publicDemoSettingsNotice({fellBack = false} = {}) {
 
 async function loadSettingsSection(section) {
   if (section === "team") {
-    const [memberships, projects] = await Promise.all([
+    const [memberships, projects, capabilities] = await Promise.all([
       client.memberships.list({signal: invalidation}),
-      client.projects.list({signal: invalidation})
+      client.projects.list({signal: invalidation}),
+      client.capabilities.get({signal: invalidation})
     ]);
     const planning = client.isPublicDemo
       ? {items: (await Promise.all(projects.items.map((project) => client.workItems.list(project.id, {limit: 10, signal: invalidation})))).flatMap((page) => page.items)}
       : {items: []};
-    return {memberships, projects, planning};
+    return {memberships, projects, planning, capabilities};
   }
   if (section === "accounts") {
     const [accounts, workspace] = await Promise.all([
@@ -51,6 +52,9 @@ async function loadSettingsSection(section) {
   }
   if (section === "security") {
     return {workspace: await client.workspace.get({signal: invalidation})};
+  }
+  if (section === "capabilities") {
+    return {capabilities: await client.capabilities.get({signal: invalidation})};
   }
   if (section === "data") {
     if (client.isPublicDemo) {
@@ -70,6 +74,7 @@ async function loadSettingsSection(section) {
     ]);
     return {memberships, projects, activity, documents, applicationData};
   }
+  if (section === "profile") return {capabilities: await client.capabilities.get({signal: invalidation})};
   return {};
 }
 
@@ -80,7 +85,8 @@ const settingsResult = await (async () => {
   const sections = [
     {key: "team", label: "Team access", href: "/app/admin?section=team"},
     ...(canManageWorkspace ? [
-      {key: "accounts", label: "Accounts", href: "/app/admin?section=accounts"}
+      {key: "accounts", label: "Accounts", href: "/app/admin?section=accounts"},
+      {key: "capabilities", label: "Capabilities", href: "/app/admin?section=capabilities"}
     ] : []),
     ...(isAdmin || client.isPublicDemo ? [{key: "workflow", label: "Workflows", href: "/app/admin?section=workflow"}] : []),
     ...(!client.isPublicDemo ? [
@@ -110,11 +116,13 @@ const settingsResult = await (async () => {
 if (settingsResult instanceof Error) {
   display(errorView(settingsResult, refreshPage));
 } else {
-  const {me, isAdmin, canManageWorkspace, sections, section, publicDemoFallback, accounts, workspace, memberships, projects, planning, activity, documents, applicationData, workConfiguration} = settingsResult;
+  const {me, isAdmin, canManageWorkspace, sections, section, publicDemoFallback, accounts, workspace, memberships, projects, planning, activity, documents, applicationData, workConfiguration, capabilities} = settingsResult;
   if (workConfiguration) configureWorkTaxonomy(workConfiguration);
+  if (capabilities) applyWorkspaceCapabilities(capabilities);
   const sectionCopy = {
     team: ["Team access", client.isPublicDemo ? "Meet the five fictional teammates behind the sample work." : isAdmin ? "Manage members, roles, and project access." : "Review the people and access in this workspace."],
     accounts: ["Accounts", "Switch workspaces and manage the current account."],
+    capabilities: ["Workspace capabilities", "Configure the functional policies used by planning, finance, identity, security, and integrations."],
     workflow: ["Workflows", client.isPublicDemo ? "Try the task types, status columns, and transitions used by the sample team." : "Shape the task types, statuses, and transitions your team uses."],
     profile: ["Your profile", "Keep your workspace identity and regional preferences current."],
     security: ["Security", "Review authentication, protected storage, and permissions."],
@@ -127,6 +135,7 @@ if (settingsResult instanceof Error) {
       buttonLink("Account settings", "/app/admin?section=accounts#account-settings")
     ],
     workflow: [],
+    capabilities: [],
     profile: [],
     security: [],
     data: [buttonLink(client.isPublicDemo ? "Open sample documents" : "Open documents", "/app/documents")]
@@ -146,7 +155,7 @@ if (settingsResult instanceof Error) {
       display(actionPanel("Role and project access", membershipTable(memberships.items, projects.items), {id: "members", meta: `${memberships.items.length} fictional people`}));
     } else {
       display(canManageWorkspace
-        ? teamManagementPanel(client, memberships.items, projects.items, {onSaved: refreshPage, showHeading: false})
+        ? teamManagementPanel(client, memberships.items, projects.items, {onSaved: refreshPage, showHeading: false, capabilities})
         : actionPanel("Workspace members", membershipTable(memberships.items, projects.items), {open: true, id: "members"}));
     }
   } else if (section === "accounts") {
@@ -154,8 +163,11 @@ if (settingsResult instanceof Error) {
   } else if (section === "workflow") {
     if (client.isPublicDemo) display(workConfigurationSummary(workConfiguration));
     display(actionPanel(client.isPublicDemo ? "Edit workflow configuration" : "Task types and status columns", workConfigurationEditor(client, workConfiguration, {onSaved: refreshPage}), {open: !client.isPublicDemo, id: "work-configuration", meta: client.isPublicDemo ? "Advanced · safe to edit · resets daily" : "Types, statuses, transitions"}));
+  } else if (section === "capabilities") {
+    display(workspaceCapabilitiesSummary(capabilities));
+    display(actionPanel("Capability configuration", workspaceCapabilitiesEditor(client, capabilities, {onSaved: refreshPage}), {open: true, id: "capability-configuration", meta: `Version ${capabilities.version} · 128 KiB maximum`}));
   } else if (section === "profile") {
-    display(actionPanel("Profile details", profileForm(client, me, {onSaved: refreshPage}), {open: true, id: "profile"}));
+    display(actionPanel("Profile details", profileForm(client, me, {onSaved: refreshPage, capabilities}), {open: true, id: "profile"}));
   } else if (section === "security") {
     display(securityManagementPanel({workspace, me, showHeading: false}));
   } else if (section === "data") {

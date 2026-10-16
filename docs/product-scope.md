@@ -2,7 +2,7 @@
 
 Team Spaces is a portfolio-first project and work management application for users who may work across a private personal account plus one or more team or client accounts. Its functional target is a comprehensive project-management surface with an original Observable Framework user experience and a demand-priced AWS serverless architecture.
 
-The product roadmap, acceptance criteria, and current implementation evidence live in this document, the [roadmap](roadmap.md), and the linked architecture and contract documents. A feature is not complete merely because a similarly named field or read-only visualization exists.
+The product roadmap, acceptance criteria, and current implementation evidence live in this document, the [roadmap](roadmap.md), and the audited [OpenProject parity matrix](openproject-parity.md). A feature is not complete merely because a similarly named field or read-only visualization exists.
 
 ## Scale and ownership target
 
@@ -25,25 +25,23 @@ The functional target includes:
 
 Commercial support, hosted-service billing, installation assistance, training, and service-level commitments are operational offerings rather than application features.
 
-## Delivery sequencing
+## Capability layers
 
-The target is delivered incrementally, but later phases are not out of scope:
+The target is organized into six independently testable layers. The first five satisfy the audited OpenProject 17.7.2 core criteria; their names still do not waive row-level acceptance evidence:
 
-1. **Correctness and scale foundation:** real cursor pagination, stable work queries, direct addressing, conditional/idempotent mutations, projections, and production adapter tests.
-2. **Configurable work engine:** types, statuses, workflows, typed custom fields, relations, bulk operations, shared views, boards, exports, and baselines.
-3. **Collaboration and awareness:** rich comments/mentions, notifications, reminders, meetings, wiki, news/forums, global search, and document revisions.
-4. **Planning and financial control:** automatic scheduling, working calendars, Scrum, resource capacity, time editing, rates, costs, budgets, and configurable reporting.
-5. **Administration and integrations:** groups/custom roles, tenant module settings, webhooks, imports, Git/file connectors, SSO/SCIM/LDAP, malware scanning, and enterprise add-ons.
-6. **Separate surfaces:** BIM workflows and a mobile companion after the underlying APIs are stable and complete enough to support them.
+1. **Correctness and scale foundation:** cursor/keyset pages, stable work queries, direct keys, conditional/idempotent mutations, workspace projections, production-adapter tests, and versioned export/import.
+2. **Configurable work engine:** types, statuses, priorities, forms, typed fields, actions, relations, bulk operations, reusable views, action boards, exports, calendars, schedules, sprints, and baselines.
+3. **Collaboration and awareness:** threaded rich activity, mentions/reminders, notification/digest rules, recurring meetings, wiki/news/forum content, operation-based document collaboration, revisions, and global/attachment-content search.
+4. **Planning and financial control:** automatic scheduling, work calendars, Scrum/burndown, capacity/skills/time off, editable exact time, rates, unit/labor costs, budgets, and reusable report definitions.
+5. **Administration and integrations:** groups/departments/custom roles, lifecycle initiation/gates, branding, webhooks, Jira import, Git/SVN browsing, file/development/collaboration connectors, external sharing, OIDC/SAML deployment configuration, LDAP/SCIM, MCP, and malware-scanner callbacks.
+6. **Separate surfaces:** BIM and native mobile remain deliberately tagged outside core parity; unsupported third-party connectors enter scope only through an explicit promotion.
 
-Each phase must remain deployable and useful. Roadmap status changes only after UI, API, persistence, authorization, and proportionate automated evidence exist.
+The [parity matrix](openproject-parity.md) records acceptance evidence row by row. A regression or upstream functional addition must downgrade or extend that matrix rather than relying on this summary.
 
-## Current implemented increments
+## Current implementation boundaries
 
-Work Configuration v1 removes the fixed task taxonomy without adding an AWS service. Each workspace has one versioned DynamoDB record for task types, statuses, active/closed behavior, defaults, and role-aware transitions. Existing workspaces use a migration-free virtual default until an administrator customizes it. Task creation, edits, queries, boards, filters, badges, and bulk updates consume the same configuration; stale configuration writes and forbidden transitions fail explicitly.
+Team Spaces implements the audited functional-parity core through a serverless-native model. Capability records are versioned workspace configuration, project/task/meeting/content mutations use optimistic versions and project authorization, and scale-sensitive cross-project reads use maintained workspace projections instead of per-project fan-out. Advanced calculations remain bounded synchronous operations at the target envelope; optional email gateways, scanners, and external provider credentials are deployment integrations rather than baseline always-on services.
 
-Task list views also provide bounded current-page bulk editing for up to 25 work packages. Updates are sequential, project-scoped, and versioned, so the feature stays within the pilot API/Lambda guardrails and reports item-level conflicts without a batch service or queue.
+Collaborative content uses an immutable revision log, operation endpoint, presence leases, and optimistic conflict detection. It is not a CRDT and does not claim offline multi-master merging. Global search is a bounded projection search suitable for the documented envelope; an external search cluster remains optional if measured installation size requires deeper indexing.
 
-Meetings v1 adds a project-scoped one-time-meeting workflow without adding AWS infrastructure. A meeting remains one bounded, aggregate-32-KiB DynamoDB record containing details, participants who must be active when added while historical participants remain removable, an ordered flat agenda, presenter and same-project task links, minutes, and outcomes. The lifecycle moves from draft to open and in progress, then locks when closed; optimistic versions prevent concurrent overwrites. Creates and patches commit activity atomically, and a keyed create can safely replay its original result until its TTL-cleaned claim is removed (eligible after 24 hours). Chronological pages use the existing sparse GSI. Recurring series, notifications, calendar delivery, templates, attachments, exports, and global participant views remain separate increments so they do not create an idle scheduler, queue, or email dependency before those behaviors exist.
-
-The public demo presents these increments as a guided small-team story rather than a feature inventory. It starts with attention and assignments, moves into a compact editable board, and opens an in-progress meeting with agenda decisions, owners, minutes, and linked follow-up tasks. Settings shows fictional team workload, project-scoped access, editable status columns, and recent activity while clearly identifying private-only identity and security controls. Four document records include bounded fictional text previews; real upload, download, and document bytes remain disabled for anonymous visitors.
+The public demo remains a deliberately narrower product boundary. It allows the reviewed core project/task/meeting/time/comment surfaces and safe new read-only pages, hides private integration/content mutations, uses fictional bounded previews, has no document-bucket access, and resets through isolated alternating DynamoDB slots.

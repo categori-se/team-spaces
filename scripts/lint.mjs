@@ -25,7 +25,7 @@ for (const file of files) {
   const text = await readFile(file, "utf8");
   if (!file.startsWith("docs/") && text.includes("Open" + "Project")) failures.push(`${file}: restricted product reference must stay in docs only`);
   if (/console\.log\((?!JSON\.stringify|`Team Spaces local API)/.test(text)) failures.push(`${file}: use structured logs`);
-  if (/fetch\([^)]*,\s*\{[^}]*method:\s*["'`](POST|PUT|PATCH|DELETE)/s.test(text) && !file.endsWith("api.js") && !file.endsWith("auth.js")) {
+  if (file.startsWith(`apps${path.sep}web${path.sep}`) && /fetch\([^)]*,\s*\{[^}]*method:\s*["'`](POST|PUT|PATCH|DELETE)/s.test(text) && !file.endsWith("api.js") && !file.endsWith("auth.js")) {
     failures.push(`${file}: frontend mutations must go through lib/api.js`);
   }
 }

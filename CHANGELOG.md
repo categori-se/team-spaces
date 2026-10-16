@@ -7,6 +7,12 @@ to follow [Semantic Versioning](https://semver.org/) once tagged releases begin.
 
 ### Added
 
+- Connected initiatives with public read-only project discovery and roadmaps,
+  private coordination, dependency and acceptance evidence, and GitHub Projects
+  browsing with explicit repository and visibility boundaries.
+- Configurable workflow, collaboration, integration and administration surfaces
+  with a version-bounded parity matrix and separate operator acceptance gates.
+
 - Open-source contribution, conduct, security, support, governance, trademark,
   roadmap, and third-party notice documentation.
 - GitHub issue forms, pull-request guidance, and dependency-update automation.

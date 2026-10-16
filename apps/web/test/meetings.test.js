@@ -38,8 +38,17 @@ test("meeting payload normalizes dates and keeps agenda links inside the selecte
     status: "draft",
     location: "Room 4",
     participantIds: ["user-one", "user-two"],
+    attendance: [
+      {userId: "user-one", status: "invited", note: ""},
+      {userId: "user-two", status: "invited", note: ""}
+    ],
+    invitationMessage: "",
+    attachmentIds: [],
+    recurrence: undefined,
+    template: false,
     agendaItems: [{
       id: "agenda-one",
+      section: "General",
       title: "Launch decision",
       durationMinutes: 20,
       presenterId: "user-two",

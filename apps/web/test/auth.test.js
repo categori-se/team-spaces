@@ -12,7 +12,7 @@ async function withAuthBrowser(
   search = "?code=callback-code&state=oauth-state&view=mine#public-demo-entry",
   options = {}
 ) {
-  const globalKeys = ["window", "location", "history", "sessionStorage", "__TEAMSPACES_LOCAL_CONFIG__", "fetch"];
+  const globalKeys = ["window", "location", "history", "sessionStorage", "localStorage", "__TEAMSPACES_LOCAL_CONFIG__", "fetch"];
   const previousDescriptors = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: `${options.browserOrigin ?? "http://127.0.0.1:3000"}/app${search}`
@@ -23,6 +23,7 @@ async function withAuthBrowser(
     location: dom.window.location,
     history: dom.window.history,
     sessionStorage: dom.window.sessionStorage,
+    localStorage: dom.window.localStorage,
     __TEAMSPACES_LOCAL_CONFIG__: {
       apiBaseUrl: "http://127.0.0.1:8787/api/v1",
       authMode: "cognito",
@@ -369,4 +370,57 @@ test("browser history cleanup cannot turn a saved session into an auth failure",
     await reloadedAuthModule.handleAuthCallback();
     assert.equal(tokenCalls, 1, "a saved session makes a leftover callback URL idempotent after reload");
   });
+});
+
+test("local access replaces stale account scope and clears it on sign out", async () => {
+  await withAuthBrowser(async ({currentSession, beginSignIn, localSignIn, signOut}) => {
+    Object.assign(globalThis.__TEAMSPACES_LOCAL_CONFIG__, {authMode: "local", publicDemo: {enabled: false}});
+    globalThis.location = {hostname: "127.0.0.1", origin: "http://127.0.0.1:3000", href: "http://127.0.0.1:3000/"};
+    const calls = [];
+    localStorage.setItem("teamspaces.accountId", "old-demo-account");
+    globalThis.fetch = async (url, options) => {
+      calls.push({url, options});
+      return new Response(JSON.stringify({data: {access_token: "local-token", id_token: "local-token", expires_in: 28800, workspaceId: "actual-workspace"}}), {status: 200});
+    };
+    assert.deepEqual(await currentSession(), {authenticated: false, mode: "local"});
+    await beginSignIn();
+    assert.equal(location.href, "/local-login");
+    assert.equal(calls.length, 0);
+    await assert.rejects(localSignIn("  "), /Enter the local access key/);
+    assert.equal(calls.length, 0);
+    await localSignIn(" entered-local-key ");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "http://127.0.0.1:8787/api/v1/local/session");
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.credentials, "omit");
+    assert.deepEqual(JSON.parse(calls[0].options.body), {key: "entered-local-key"});
+    const stored = sessionStorage.getItem("teamspaces.session");
+    assert.doesNotMatch(stored, /entered-local-key/);
+    assert.equal(JSON.parse(stored).workspaceId, "actual-workspace");
+    assert.equal(localStorage.getItem("teamspaces.accountId"), "actual-workspace");
+    assert.equal((await currentSession()).mode, "local");
+    assert.equal((await currentSession()).authenticated, true);
+    assert.equal(location.href, "/app/projects");
+    const {apiClient} = await import("../src/lib/api.js");
+    const client = await apiClient();
+    await client.coordination.get({initiativeId: "opengeo"});
+    assert.equal(calls[1].options.headers["x-teamspaces-account-id"], "actual-workspace");
+    assert.equal(calls[1].options.headers.authorization, "Bearer local-token");
+    sessionStorage.setItem("teamspaces.session", JSON.stringify({mode: "local", accessToken: "expired", expiresAt: Date.now() - 1, refreshToken: "unused"}));
+    assert.deepEqual(await currentSession(), {authenticated: false, mode: "local"});
+    assert.equal(calls.length, 2, "an expired local session never refreshes against Cognito");
+    await signOut();
+    assert.equal(sessionStorage.getItem("teamspaces.session"), null);
+    assert.equal(localStorage.getItem("teamspaces.accountId"), null);
+    assert.equal(location.href, "/");
+  }, "");
+});
+
+test("rejected local keys do not save a session or expose the submitted key", async () => {
+  await withAuthBrowser(async ({localSignIn}) => {
+    Object.assign(globalThis.__TEAMSPACES_LOCAL_CONFIG__, {authMode: "local", publicDemo: {enabled: false}});
+    globalThis.fetch = async () => new Response(JSON.stringify({detail: "Do not echo submitted-local-key"}), {status: 401});
+    await assert.rejects(localSignIn("submitted-local-key"), {message: "The local access key was not accepted"});
+    assert.equal(sessionStorage.getItem("teamspaces.session"), null);
+  }, "");
 });

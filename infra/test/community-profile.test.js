@@ -13,6 +13,7 @@ const baseContext = {
   certificateArn: "arn:aws:acm:us-east-1:111111111111:certificate/community",
   generateWebBucketName: "true",
   enablePublicDemo: "false",
+  enableScheduledNotifications: "false",
   enableOperations: "false",
   enablePitr: "false",
   allowLocalDevelopmentOrigins: "false",
@@ -186,6 +187,54 @@ test("community profile excludes localhost unless a developer opts in", () => {
   assert.match(JSON.stringify(responseHeaders), /http:\/\/localhost:8787/);
 });
 
+test("identity deployment supports required MFA and existing OIDC, SAML, or LDAP bridges", () => {
+  const requiredMfa = synthesizedTemplate({mfaMode: "required"});
+  const userPool = Object.values(requiredMfa.Resources).find((resource) => resource.Type === "AWS::Cognito::UserPool");
+  assert.equal(userPool.Properties.MfaConfiguration, "ON");
+
+  const federated = synthesizedTemplate({
+    existingUserPoolId: "us-east-1_FEDERATED",
+    cognitoDomainUrl: "https://identity.example.com",
+    identityProviderNames: "CorporateOIDC,PartnerSAML,DirectoryLDAPBridge"
+  });
+  const client = Object.values(federated.Resources).find((resource) => resource.Type === "AWS::Cognito::UserPoolClient");
+  assert.deepEqual(client.Properties.SupportedIdentityProviders, ["COGNITO", "CorporateOIDC", "PartnerSAML", "DirectoryLDAPBridge"]);
+  assert.throws(() => synthesizedTemplate({mfaMode: "sometimes"}), /mfaMode must be/);
+  assert.throws(() => synthesizedTemplate({identityProviderNames: "CorporateOIDC"}), /requires existingUserPoolId/);
+});
+
+test("direct LDAP login and scheduled synchronization are explicit, secret-backed deployment options", () => {
+  assert.throws(() => synthesizedTemplate({ldapWorkspaceId: "workspace-default"}), /requires integrationCredentialsSecretName/);
+  const template = synthesizedTemplate({ldapWorkspaceId: "workspace-default", ldapLoginLabel: "Corporate LDAP", integrationCredentialsSecretName: "team-spaces/integrations"});
+  const resources = Object.values(template.Resources ?? {});
+  const schedules = resources.filter((resource) => resource.Type === "AWS::Scheduler::Schedule");
+  assert.equal(schedules.length, 1);
+  assert.equal(schedules[0].Properties.ScheduleExpression, "cron(20 * * * ? *)");
+  const ldapWorker = resources.find((resource) => resource.Type === "AWS::Lambda::Function" && resource.Properties.Environment?.Variables?.LDAP_WORKSPACE_ID);
+  assert.equal(ldapWorker.Properties.Environment.Variables.LDAP_WORKSPACE_ID, "workspace-default");
+  assert.match(JSON.stringify(ldapWorker.Properties.Environment.Variables.INTEGRATION_CREDENTIALS_JSON), /team-spaces\/integrations/);
+  const routes = resources.filter((resource) => resource.Type === "AWS::ApiGatewayV2::Route");
+  assert.equal(routes.some((route) => route.Properties.RouteKey === "POST /api/v1/ldap-auth/{workspaceId}" && route.Properties.AuthorizationType === "NONE"), true);
+  assert.equal(routes.some((route) => route.Properties.RouteKey === "ANY /api/v1/ldap/{workspaceId}/{proxy+}" && route.Properties.AuthorizationType === "NONE"), true);
+  const runtimeConfig = resources.find((resource) => resource.Type === "Custom::AWS" && JSON.stringify(resource).includes("runtime-config.json"));
+  const runtimeConfigText = JSON.stringify(runtimeConfig?.Properties).replaceAll("\\", "");
+  assert.match(runtimeConfigText, /"ldap":/);
+  assert.match(runtimeConfigText, /"workspaceId": "workspace-default"/);
+  assert.match(runtimeConfigText, /"label": "Corporate LDAP"/);
+});
+
+test("managed provider permissions have an explicit secret-backed hourly reconciliation option", () => {
+  assert.throws(() => synthesizedTemplate({integrationSyncWorkspaceId: "workspace-default"}), /requires integrationCredentialsSecretName/);
+  const template = synthesizedTemplate({integrationSyncWorkspaceId: "workspace-default", integrationCredentialsSecretName: "team-spaces/integrations"});
+  const resources = Object.values(template.Resources ?? {});
+  const schedule = resources.find((resource) => resource.Type === "AWS::Scheduler::Schedule");
+  assert.equal(schedule.Properties.ScheduleExpression, "cron(35 * * * ? *)");
+  const worker = resources.find((resource) => resource.Type === "AWS::Lambda::Function" && resource.Properties.Environment?.Variables?.INTEGRATION_SYNC_WORKSPACE_ID);
+  assert.equal(worker.Properties.Environment.Variables.INTEGRATION_SYNC_WORKSPACE_ID, "workspace-default");
+  assert.equal(worker.Properties.ReservedConcurrentExecutions, 1);
+  assert.match(JSON.stringify(worker.Properties.Environment.Variables.INTEGRATION_CREDENTIALS_JSON), /team-spaces\/integrations/);
+});
+
 test("community profile bounds versions and every explicit provider log group", () => {
   const template = synthesizedTemplate();
   const resources = Object.values(template.Resources ?? {});
@@ -297,10 +346,32 @@ test("optional operations add four core alarms and notification resources withou
   });
   assert.deepEqual(resourceDelta(resourceCounts(core), resourceCounts(operations)), {
     "AWS::Budgets::Budget": 1,
-    "AWS::CloudWatch::Alarm": 4,
+    "AWS::CloudWatch::Alarm": 3,
     "AWS::SNS::Subscription": 1,
     "AWS::SNS::Topic": 1
   });
+});
+
+test("scheduled summaries add an isolated hourly worker with retry-safe delivery resources", () => {
+  const core = synthesizedTemplate();
+  const scheduled = synthesizedTemplate({enableScheduledNotifications: "true"});
+  assert.deepEqual(resourceDelta(resourceCounts(core), resourceCounts(scheduled)), {
+    "AWS::IAM::Policy": 2,
+    "AWS::IAM::Role": 2,
+    "AWS::Lambda::Function": 1,
+    "AWS::Logs::LogGroup": 1,
+    "AWS::SQS::Queue": 1,
+    "AWS::Scheduler::Schedule": 1
+  });
+  const resources = Object.values(scheduled.Resources ?? {});
+  const worker = resources.find((resource) => resource.Type === "AWS::Lambda::Function" && resource.Properties.Timeout === 300);
+  assert.ok(worker);
+  assert.equal(worker.Properties.ReservedConcurrentExecutions, 1);
+  const schedule = resources.find((resource) => resource.Type === "AWS::Scheduler::Schedule");
+  assert.equal(schedule.Properties.ScheduleExpression, "cron(5 * * * ? *)");
+  assert.equal(schedule.Properties.ScheduleExpressionTimezone, "UTC");
+  assert.deepEqual(schedule.Properties.FlexibleTimeWindow, {Mode: "OFF"});
+  assert.equal(schedule.Properties.Target.RetryPolicy.MaximumRetryAttempts, 2);
 });
 
 test("PITR is an independent stored-data option with no service resource delta", () => {
@@ -320,9 +391,13 @@ test("community deploy command opts out explicitly and contains no private deplo
   assert.match(script, /ACM_CERTIFICATE_ARN/);
   assert.match(script, /TEAMSPACES_WORK_INDEX_READY/);
   assert.match(script, /TEAMSPACES_ENABLE_PUBLIC_DEMO/);
+  assert.match(script, /TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS/);
   assert.match(script, /TEAMSPACES_ENABLE_OPERATIONS/);
   assert.match(script, /TEAMSPACES_ENABLE_PITR/);
   assert.match(script, /TEAMSPACES_ALLOW_LOCAL_DEVELOPMENT_ORIGINS/);
+  assert.match(script, /TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME/);
+  assert.match(script, /TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID/);
+  assert.match(script, /TEAMSPACES_LDAP_WORKSPACE_ID/);
   assert.match(script, /allowLocalDevelopmentOrigins=\$\{allowLocalDevelopmentOrigins\}/);
   assert.doesNotMatch(script, /--require-approval["', ]+never/);
   assert.doesNotMatch(script, /\b\d{12}\b|arn:(?:aws|aws-cn|aws-us-gov):|us-[a-z]+-\d+_[A-Za-z0-9]+/);
@@ -331,6 +406,7 @@ test("community deploy command opts out explicitly and contains no private deplo
 
 test("hosted deployment explicitly restores every cost and identity profile setting", () => {
   const script = readFileSync(new URL("../../scripts/deploy-hosted.mjs", import.meta.url), "utf8");
+  assert.match(script, /TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS === "true"/);
   for (const context of [
     "generateWebBucketName=false",
     "enablePublicDemo=true",
@@ -352,6 +428,9 @@ test("hosted deployment explicitly restores every cost and identity profile sett
     assert.match(script, new RegExp(`requiredEnvironment\\("${name}"\\)`));
   }
   assert.match(script, /TEAMSPACES_MANAGED_LOGIN_BRANDING_ASSET_DIRECTORY/);
+  assert.match(script, /TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME/);
+  assert.match(script, /TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID/);
+  assert.match(script, /TEAMSPACES_LDAP_WORKSPACE_ID/);
   assert.match(script, /path\.isAbsolute\(managedLoginBrandingAssetDirectory\)/);
   for (const context of [
     "stackName=${stackName}",
@@ -378,6 +457,7 @@ test("community deploy validation accepts placeholders but rejects a non-us-east
     TEAMSPACES_DOMAIN_NAME: "community.example.com",
     ACM_CERTIFICATE_ARN: "arn:aws:acm:us-east-1:111111111111:certificate/community",
     TEAMSPACES_ENABLE_PUBLIC_DEMO: "false",
+    TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS: "false",
     TEAMSPACES_ENABLE_OPERATIONS: "false",
     TEAMSPACES_ENABLE_PITR: "false",
     TEAMSPACES_WORK_INDEX_READY: "false",
@@ -391,6 +471,7 @@ test("community deploy validation accepts placeholders but rejects a non-us-east
     ACM_CERTIFICATE_ARN: "arn:aws:acm:us-east-1:111111111111:certificate/replace-me"
   });
   assert.equal(defaults.enablePublicDemo, "false");
+  assert.equal(defaults.enableScheduledNotifications, "false");
   assert.equal(defaults.enableOperations, "false");
   assert.equal(defaults.enablePitr, "false");
   assert.equal(defaults.allowLocalDevelopmentOrigins, "false");
@@ -422,4 +503,15 @@ test("community deploy validation accepts placeholders but rejects a non-us-east
     TEAMSPACES_ENABLE_PUBLIC_DEMO: "true",
     TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME: "demo.community.example.com"
   }).publicDemoDomainName, "demo.community.example.com");
+  assert.throws(
+    () => configuration({TEAMSPACES_LDAP_WORKSPACE_ID: "workspace-default"}),
+    /TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME is required/
+  );
+  const ldap = configuration({TEAMSPACES_LDAP_WORKSPACE_ID: "workspace-default", TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME: "team-spaces/integrations"});
+  assert.equal(ldap.ldapWorkspaceId, "workspace-default");
+  assert.equal(ldap.integrationCredentialsSecretName, "team-spaces/integrations");
+  assert.throws(
+    () => configuration({TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID: "workspace-default"}),
+    /TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME is required/
+  );
 });

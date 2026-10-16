@@ -90,8 +90,16 @@ export class TeamSpacesStack extends Stack {
       ? undefined
       : configuredWebBucketName;
     const existingUserPoolId = this.node.tryGetContext("existingUserPoolId");
+    const mfaMode = String(this.node.tryGetContext("mfaMode") ?? "optional").toLowerCase();
+    if (!new Set(["off", "optional", "required"]).has(mfaMode)) throw new Error("mfaMode must be off, optional, or required");
+    const configuredIdentityProviders = String(this.node.tryGetContext("identityProviderNames") ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+    if (configuredIdentityProviders.length && !existingUserPoolId) throw new Error("identityProviderNames requires existingUserPoolId with those OIDC, SAML, or LDAP-bridge providers already configured");
     const authDomainName = this.node.tryGetContext("authDomainName");
     const authCertificateArn = this.node.tryGetContext("authCertificateArn");
+    const integrationCredentialsSecretName = this.node.tryGetContext("integrationCredentialsSecretName");
+    const integrationSyncWorkspaceId = String(this.node.tryGetContext("integrationSyncWorkspaceId") ?? "").trim();
+    const ldapWorkspaceId = String(this.node.tryGetContext("ldapWorkspaceId") ?? "").trim();
+    const ldapLoginLabel = String(this.node.tryGetContext("ldapLoginLabel") ?? "Organization directory").trim().slice(0, 80);
     const cognitoDomainUrl = this.node.tryGetContext("cognitoDomainUrl");
     const managedLoginDomainPrefix = this.node.tryGetContext("managedLoginDomainPrefix");
     const managedLoginBrandingAssetDirectory = this.node.tryGetContext("managedLoginBrandingAssetDirectory");
@@ -149,6 +157,7 @@ export class TeamSpacesStack extends Stack {
     if (publicDemoDomainName && !certificateArn) {
       throw new Error("certificateArn is required when publicDemoDomainName is configured");
     }
+    const enableScheduledNotifications = booleanContext(this.node, "enableScheduledNotifications", false);
     const enableOperations = booleanContext(this.node, "enableOperations", false);
     const enablePitr = booleanContext(this.node, "enablePitr", false);
     const workIndexReady = String(this.node.tryGetContext("workIndexReady") ?? "false") === "true";
@@ -271,7 +280,7 @@ export class TeamSpacesStack extends Stack {
         signInAliases: {email: true},
         autoVerify: {email: true},
         selfSignUpEnabled: false,
-        mfa: cognito.Mfa.OPTIONAL,
+        mfa: {off: cognito.Mfa.OFF, optional: cognito.Mfa.OPTIONAL, required: cognito.Mfa.REQUIRED}[mfaMode],
         mfaSecondFactor: {sms: false, otp: true},
         accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
         removalPolicy: RemovalPolicy.RETAIN,
@@ -286,6 +295,7 @@ export class TeamSpacesStack extends Stack {
 
     const userPoolClient = new cognito.UserPoolClient(this, "UserPoolClient", {
       userPool,
+      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO, ...configuredIdentityProviders.map((name) => cognito.UserPoolClientIdentityProvider.custom(name))],
       generateSecret: false,
       preventUserExistenceErrors: true,
       authFlows: {userSrp: true},
@@ -417,8 +427,11 @@ export class TeamSpacesStack extends Stack {
         DEFAULT_WORKSPACE_ID: "workspace-default",
         WORKSPACE_NAME: workspaceName,
         APP_ORIGIN: appOrigin,
+        MFA_MODE: mfaMode,
         WORK_INDEX_READY: String(workIndexReady),
+        SCHEDULED_NOTIFICATIONS_ENABLED: String(enableScheduledNotifications),
         ORIGIN_VERIFY_ENFORCED: String(originVerifyEnforced),
+        ...(integrationCredentialsSecretName ? {INTEGRATION_CREDENTIALS_JSON: cdk.SecretValue.secretsManager(integrationCredentialsSecretName).toString()} : {}),
         ...(originVerifySecret ? {ORIGIN_VERIFY_SECRET: originVerifySecret} : {}),
         ...(originVerifyNextSecret ? {ORIGIN_VERIFY_SECRET_NEXT: originVerifyNextSecret} : {})
       },
@@ -456,6 +469,119 @@ export class TeamSpacesStack extends Stack {
       ],
       resources: [attachmentBucket.arnForObjects("documents/*")]
     }));
+
+    if (enableScheduledNotifications) {
+      const notificationWorkerLogGroup = new logs.LogGroup(this, "NotificationWorkerLogGroup", {
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: RemovalPolicy.RETAIN
+      });
+      const notificationWorker = new nodeLambda.NodejsFunction(this, "NotificationWorkerFunction", {
+        entry: path.join(repoRoot, "services/api/src/notifications/scheduled-handler.js"),
+        handler: "handler",
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.ARM_64,
+        timeout: Duration.minutes(5),
+        memorySize: 256,
+        reservedConcurrentExecutions: 1,
+        logGroup: notificationWorkerLogGroup,
+        environment: {
+          TABLE_NAME: table.tableName,
+          DEFAULT_WORKSPACE_ID: "workspace-default",
+          WORK_INDEX_READY: String(workIndexReady)
+        },
+        bundling: {
+          format: nodeLambda.OutputFormat.ESM,
+          target: "node24",
+          mainFields: ["module", "main"],
+          banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);"
+        }
+      });
+      table.grantReadWriteData(notificationWorker);
+      const notificationDeadLetterQueue = new sqs.Queue(this, "NotificationWorkerDeadLetterQueue", {
+        encryption: sqs.QueueEncryption.SQS_MANAGED,
+        retentionPeriod: Duration.days(7),
+        removalPolicy: RemovalPolicy.RETAIN
+      });
+      const notificationSchedulerRole = new iam.Role(this, "NotificationSchedulerRole", {
+        assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com")
+      });
+      notificationWorker.grantInvoke(notificationSchedulerRole);
+      notificationDeadLetterQueue.grantSendMessages(notificationSchedulerRole);
+      new scheduler.CfnSchedule(this, "HourlyNotificationDigests", {
+        description: "Deliver due per-user daily and weekly Team Spaces notification summaries",
+        flexibleTimeWindow: {mode: "OFF"},
+        scheduleExpression: "cron(5 * * * ? *)",
+        scheduleExpressionTimezone: "UTC",
+        target: {
+          arn: notificationWorker.functionArn,
+          roleArn: notificationSchedulerRole.roleArn,
+          deadLetterConfig: {arn: notificationDeadLetterQueue.queueArn},
+          input: JSON.stringify({time: "<aws.scheduler.scheduled-time>"}),
+          retryPolicy: {
+            maximumEventAgeInSeconds: Duration.hours(2).toSeconds(),
+            maximumRetryAttempts: 2
+          }
+        }
+      });
+    }
+
+    if (ldapWorkspaceId) {
+      if (!integrationCredentialsSecretName) throw new Error("ldapWorkspaceId requires integrationCredentialsSecretName");
+      const ldapSyncLogGroup = new logs.LogGroup(this, "LdapSyncLogGroup", {retention: logs.RetentionDays.ONE_WEEK, removalPolicy: RemovalPolicy.RETAIN});
+      const ldapSyncFunction = new nodeLambda.NodejsFunction(this, "LdapSyncFunction", {
+        entry: path.join(repoRoot, "services/api/src/directory/scheduled-handler.js"),
+        handler: "handler",
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.ARM_64,
+        timeout: Duration.minutes(5),
+        memorySize: 256,
+        reservedConcurrentExecutions: 1,
+        logGroup: ldapSyncLogGroup,
+        environment: {TABLE_NAME: table.tableName, DEFAULT_WORKSPACE_ID: ldapWorkspaceId, LDAP_WORKSPACE_ID: ldapWorkspaceId, INTEGRATION_CREDENTIALS_JSON: cdk.SecretValue.secretsManager(integrationCredentialsSecretName).toString()},
+        bundling: {format: nodeLambda.OutputFormat.ESM, target: "node24", mainFields: ["module", "main"], banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);"}
+      });
+      table.grantReadWriteData(ldapSyncFunction);
+      const ldapSyncDeadLetterQueue = new sqs.Queue(this, "LdapSyncDeadLetterQueue", {encryption: sqs.QueueEncryption.SQS_MANAGED, retentionPeriod: Duration.days(7), removalPolicy: RemovalPolicy.RETAIN});
+      const ldapSyncSchedulerRole = new iam.Role(this, "LdapSyncSchedulerRole", {assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com")});
+      ldapSyncFunction.grantInvoke(ldapSyncSchedulerRole);
+      ldapSyncDeadLetterQueue.grantSendMessages(ldapSyncSchedulerRole);
+      new scheduler.CfnSchedule(this, "HourlyLdapSynchronization", {
+        description: "Synchronize LDAP users, status, departments, groups, and memberships",
+        flexibleTimeWindow: {mode: "OFF"},
+        scheduleExpression: "cron(20 * * * ? *)",
+        scheduleExpressionTimezone: "UTC",
+        target: {arn: ldapSyncFunction.functionArn, roleArn: ldapSyncSchedulerRole.roleArn, deadLetterConfig: {arn: ldapSyncDeadLetterQueue.queueArn}, retryPolicy: {maximumEventAgeInSeconds: Duration.hours(2).toSeconds(), maximumRetryAttempts: 2}}
+      });
+    }
+
+    if (integrationSyncWorkspaceId) {
+      if (!integrationCredentialsSecretName) throw new Error("integrationSyncWorkspaceId requires integrationCredentialsSecretName");
+      const integrationSyncLogGroup = new logs.LogGroup(this, "IntegrationSyncLogGroup", {retention: logs.RetentionDays.ONE_WEEK, removalPolicy: RemovalPolicy.RETAIN});
+      const integrationSyncFunction = new nodeLambda.NodejsFunction(this, "IntegrationSyncFunction", {
+        entry: path.join(repoRoot, "services/api/src/integrations/scheduled-handler.js"),
+        handler: "handler",
+        runtime: lambda.Runtime.NODEJS_24_X,
+        architecture: lambda.Architecture.ARM_64,
+        timeout: Duration.minutes(5),
+        memorySize: 256,
+        reservedConcurrentExecutions: 1,
+        logGroup: integrationSyncLogGroup,
+        environment: {TABLE_NAME: table.tableName, DEFAULT_WORKSPACE_ID: integrationSyncWorkspaceId, INTEGRATION_SYNC_WORKSPACE_ID: integrationSyncWorkspaceId, INTEGRATION_CREDENTIALS_JSON: cdk.SecretValue.secretsManager(integrationCredentialsSecretName).toString()},
+        bundling: {format: nodeLambda.OutputFormat.ESM, target: "node24", mainFields: ["module", "main"], banner: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);"}
+      });
+      table.grantReadWriteData(integrationSyncFunction);
+      const integrationSyncDeadLetterQueue = new sqs.Queue(this, "IntegrationSyncDeadLetterQueue", {encryption: sqs.QueueEncryption.SQS_MANAGED, retentionPeriod: Duration.days(7), removalPolicy: RemovalPolicy.RETAIN});
+      const integrationSyncSchedulerRole = new iam.Role(this, "IntegrationSyncSchedulerRole", {assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com")});
+      integrationSyncFunction.grantInvoke(integrationSyncSchedulerRole);
+      integrationSyncDeadLetterQueue.grantSendMessages(integrationSyncSchedulerRole);
+      new scheduler.CfnSchedule(this, "HourlyManagedIntegrationSynchronization", {
+        description: "Reconcile explicitly configured managed provider resources with project membership",
+        flexibleTimeWindow: {mode: "OFF"},
+        scheduleExpression: "cron(35 * * * ? *)",
+        scheduleExpressionTimezone: "UTC",
+        target: {arn: integrationSyncFunction.functionArn, roleArn: integrationSyncSchedulerRole.roleArn, deadLetterConfig: {arn: integrationSyncDeadLetterQueue.queueArn}, retryPolicy: {maximumEventAgeInSeconds: Duration.hours(2).toSeconds(), maximumRetryAttempts: 2}}
+      });
+    }
 
     /** @type {nodeLambda.NodejsFunction | undefined} */
     let publicDemoApiFunction;
@@ -546,6 +672,9 @@ export class TeamSpacesStack extends Stack {
         resources: [publicDemoTable.tableArn]
       }));
 
+      publicDemoResetFunction.grantInvoke(publicDemoApiFunction);
+      publicDemoApiFunction.addEnvironment("PUBLIC_DEMO_RESET_FUNCTION_NAME", publicDemoResetFunction.functionName);
+
       const publicDemoSchedulerRole = new iam.Role(this, "PublicDemoSchedulerRole", {
         assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com")
       });
@@ -562,7 +691,8 @@ export class TeamSpacesStack extends Stack {
       });
       publicDemoResetDeadLetterQueue.grantSendMessages(publicDemoSchedulerRole);
       new scheduler.CfnSchedule(this, "PublicDemoDailyReset", {
-        description: "Restore the shared public demo to its canonical sample data",
+        description: "Dormant fallback; normal resets are triggered by demo API access",
+        state: "DISABLED",
         flexibleTimeWindow: {mode: "OFF"},
         scheduleExpression: `cron(0 ${publicDemoResetHourUtc} * * ? *)`,
         scheduleExpressionTimezone: "UTC",
@@ -622,6 +752,36 @@ export class TeamSpacesStack extends Stack {
       methods: [apigwv2.HttpMethod.GET],
       integration: apiIntegration
     });
+    const publicCoordinationRoutes = httpApi.addRoutes({
+      path: "/api/v1/public/coordination/{initiativeId}",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: apiIntegration
+    });
+    const publicProjectRoutes = httpApi.addRoutes({
+      path: "/api/v1/public/projects",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: apiIntegration
+    });
+    const providerWebhookRoutes = httpApi.addRoutes({
+      path: "/api/v1/provider-webhooks/{workspaceId}/{connectorId}",
+      methods: [apigwv2.HttpMethod.POST],
+      integration: apiIntegration
+    });
+    const providerApiRoutes = httpApi.addRoutes({
+      path: "/api/v1/provider-api/{workspaceId}/{connectorId}/work-items",
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration: apiIntegration
+    });
+    const ldapLoginRoutes = httpApi.addRoutes({
+      path: "/api/v1/ldap-auth/{workspaceId}",
+      methods: [apigwv2.HttpMethod.POST],
+      integration: apiIntegration
+    });
+    const ldapApiRoutes = httpApi.addRoutes({
+      path: "/api/v1/ldap/{workspaceId}/{proxy+}",
+      methods: [apigwv2.HttpMethod.ANY],
+      integration: apiIntegration
+    });
     const publicDemoRoutes = publicDemoApiFunction
       ? httpApi.addRoutes({
         path: "/api/v1/demo/{proxy+}",
@@ -648,6 +808,25 @@ export class TeamSpacesStack extends Stack {
         ThrottlingRateLimit: 1,
         ThrottlingBurstLimit: 5
       },
+      "GET /api/v1/public/coordination/{initiativeId}": {
+        ThrottlingRateLimit: 1,
+        ThrottlingBurstLimit: 5
+      },
+      "GET /api/v1/public/projects": {ThrottlingRateLimit: 1, ThrottlingBurstLimit: 5},
+      "POST /api/v1/provider-webhooks/{workspaceId}/{connectorId}": {
+        ThrottlingRateLimit: Math.min(apiRateLimit, 10),
+        ThrottlingBurstLimit: Math.min(apiBurstLimit, 20)
+      },
+      "GET /api/v1/provider-api/{workspaceId}/{connectorId}/work-items": {ThrottlingRateLimit: Math.min(apiRateLimit, 10), ThrottlingBurstLimit: Math.min(apiBurstLimit, 20)},
+      "POST /api/v1/provider-api/{workspaceId}/{connectorId}/work-items": {ThrottlingRateLimit: Math.min(apiRateLimit, 5), ThrottlingBurstLimit: Math.min(apiBurstLimit, 10)},
+      "POST /api/v1/ldap-auth/{workspaceId}": {
+        ThrottlingRateLimit: 2,
+        ThrottlingBurstLimit: 5
+      },
+      "ANY /api/v1/ldap/{workspaceId}/{proxy+}": {
+        ThrottlingRateLimit: apiRateLimit,
+        ThrottlingBurstLimit: apiBurstLimit
+      },
       ...(enablePublicDemo ? {
         "ANY /api/v1/demo/{proxy+}": {
           ThrottlingRateLimit: publicDemoApiRateLimit,
@@ -659,7 +838,7 @@ export class TeamSpacesStack extends Stack {
     // explicit dependency CloudFormation may update the stage before creating
     // a new route, and may delete a route before restoring the stage during
     // rollback.
-    for (const route of [...healthRoutes, ...publicDemoRoutes]) {
+    for (const route of [...healthRoutes, ...publicCoordinationRoutes, ...publicProjectRoutes, ...providerWebhookRoutes, ...providerApiRoutes, ...ldapLoginRoutes, ...ldapApiRoutes, ...publicDemoRoutes]) {
       const cfnRoute = route.node.defaultChild;
       if (!(cfnRoute instanceof apigwv2.CfnRoute)) throw new Error("HTTP API route resource was not found");
       cfnHttpStage.addResourceDependency(cfnRoute);
@@ -708,7 +887,7 @@ function handler(event) {
   var viewerHost = request.headers.host ? request.headers.host.value.toLowerCase() : '';
   var isDemoHost = isolatedDemoHost && viewerHost === isolatedDemoHost;
   var isDemoRoute = uri === '/api/v1/demo' || uri.indexOf('/api/v1/demo/') === 0;
-  var isBoundedPublicRoute = uri === '/api/v1/health' || uri === '/api/v1/demo' || uri.indexOf('/api/v1/demo/') === 0;
+  var isBoundedPublicRoute = uri === '/api/v1/health' || uri === '/api/v1/public/projects' || uri === '/api/v1/demo' || uri.indexOf('/api/v1/demo/') === 0 || uri.indexOf('/api/v1/public/coordination/') === 0;
   if (isolatedDemoHost) {
     delete request.headers['x-teamspaces-public-demo-host'];
     var canonicalApiPath = uri.indexOf('/api/') === 0
@@ -872,8 +1051,11 @@ function handler(event) {
         domain: resolvedCognitoDomainUrl,
         clientId: userPoolClient.userPoolClientId,
         redirectUri: `${appOrigin}/app`,
-        logoutUri: appOrigin
-      }
+        logoutUri: appOrigin,
+        mfaMode,
+        identityProviderNames: configuredIdentityProviders
+      },
+      ldap: {enabled: Boolean(ldapWorkspaceId), workspaceId: ldapWorkspaceId, label: ldapLoginLabel}
     }, null, 2);
     const runtimeConfigWriter = new cr.AwsCustomResource(this, "RuntimeConfigObject", {
       onCreate: {
@@ -943,6 +1125,9 @@ function handler(event) {
         notificationsWithSubscribers: budgetNotifications
       });
 
+      // Keep the default footprint at eight alarms with the public demo.
+      // Table-only ThrottledRequests alarms were retired: AWS requires the
+      // TableName + Operation dimension pair. Do not recreate silent alarms.
       const alarms = [];
       alarms.push(new cloudwatch.Alarm(this, "LambdaErrorsAlarm", {
         metric: apiFunction.metricErrors({period: Duration.minutes(5)}),
@@ -956,17 +1141,6 @@ function handler(event) {
       }));
       alarms.push(new cloudwatch.Alarm(this, "Api5xxAlarm", {
         metric: httpStage.metricServerError({period: Duration.minutes(5)}),
-        threshold: 1,
-        evaluationPeriods: 1
-      }));
-      alarms.push(new cloudwatch.Alarm(this, "DynamoThrottlesAlarm", {
-        metric: new cloudwatch.Metric({
-          namespace: "AWS/DynamoDB",
-          metricName: "ThrottledRequests",
-          dimensionsMap: {TableName: table.tableName},
-          statistic: "Sum",
-          period: Duration.minutes(5)
-        }),
         threshold: 1,
         evaluationPeriods: 1
       }));
@@ -988,17 +1162,6 @@ function handler(event) {
         }));
         alarms.push(new cloudwatch.Alarm(this, "PublicDemoResetErrorsAlarm", {
           metric: publicDemoResetFunction.metricErrors({period: Duration.minutes(5)}),
-          threshold: 1,
-          evaluationPeriods: 1
-        }));
-        alarms.push(new cloudwatch.Alarm(this, "PublicDemoDynamoThrottlesAlarm", {
-          metric: new cloudwatch.Metric({
-            namespace: "AWS/DynamoDB",
-            metricName: "ThrottledRequests",
-            dimensionsMap: {TableName: publicDemoTable.tableName},
-            statistic: "Sum",
-            period: Duration.minutes(5)
-          }),
           threshold: 1,
           evaluationPeriods: 1
         }));

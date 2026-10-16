@@ -40,53 +40,58 @@
     "license": "Apache-2.0"
   },
   {
+    "name": "@aws-sdk/client-lambda",
+    "version": "3.1152.0",
+    "license": "Apache-2.0"
+  },
+  {
     "name": "@aws-sdk/client-s3",
     "version": "3.1113.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/core",
-    "version": "3.977.8",
+    "version": "3.978.3",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-env",
-    "version": "3.972.69",
+    "version": "3.972.74",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-http",
-    "version": "3.972.71",
-    "license": "Apache-2.0"
-  },
-  {
-    "name": "@aws-sdk/credential-provider-ini",
-    "version": "3.973.14",
-    "license": "Apache-2.0"
-  },
-  {
-    "name": "@aws-sdk/credential-provider-login",
     "version": "3.972.76",
     "license": "Apache-2.0"
   },
   {
+    "name": "@aws-sdk/credential-provider-ini",
+    "version": "3.973.19",
+    "license": "Apache-2.0"
+  },
+  {
+    "name": "@aws-sdk/credential-provider-login",
+    "version": "3.972.81",
+    "license": "Apache-2.0"
+  },
+  {
     "name": "@aws-sdk/credential-provider-node",
-    "version": "3.972.80",
+    "version": "3.972.86",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-process",
-    "version": "3.972.69",
+    "version": "3.972.74",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-sso",
-    "version": "3.973.13",
+    "version": "3.973.18",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/credential-provider-web-identity",
-    "version": "3.972.75",
+    "version": "3.972.80",
     "license": "Apache-2.0"
   },
   {
@@ -116,7 +121,7 @@
   },
   {
     "name": "@aws-sdk/nested-clients",
-    "version": "3.997.43",
+    "version": "3.997.48",
     "license": "Apache-2.0"
   },
   {
@@ -126,17 +131,17 @@
   },
   {
     "name": "@aws-sdk/signature-v4-multi-region",
-    "version": "3.996.45",
+    "version": "3.996.48",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/token-providers",
-    "version": "3.1111.0",
+    "version": "3.1150.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@aws-sdk/types",
-    "version": "3.974.4",
+    "version": "3.974.6",
     "license": "Apache-2.0"
   },
   {
@@ -146,7 +151,7 @@
   },
   {
     "name": "@aws-sdk/xml-builder",
-    "version": "3.972.39",
+    "version": "3.972.41",
     "license": "Apache-2.0"
   },
   {
@@ -301,7 +306,7 @@
   },
   {
     "name": "@smithy/core",
-    "version": "3.33.2",
+    "version": "3.36.0",
     "license": "Apache-2.0"
   },
   {
@@ -311,22 +316,22 @@
   },
   {
     "name": "@smithy/fetch-http-handler",
-    "version": "5.7.2",
+    "version": "5.8.0",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/node-http-handler",
-    "version": "4.11.2",
+    "version": "4.12.1",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/signature-v4",
-    "version": "5.7.2",
+    "version": "5.7.4",
     "license": "Apache-2.0"
   },
   {
     "name": "@smithy/types",
-    "version": "4.17.2",
+    "version": "4.19.0",
     "license": "Apache-2.0"
   },
   {

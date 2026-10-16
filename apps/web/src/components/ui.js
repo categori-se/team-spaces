@@ -97,6 +97,7 @@ function authStatusLabel(session) {
   if (!session) return "Checking session";
   if (session.authenticated && session.mode === "public-demo") return "Public demo";
   if (session.authenticated && session.mode === "demo") return "Demo access";
+  if (session.authenticated && session.mode === "ldap") return "Directory session";
   if (session.authenticated) return "Signed in";
   return "Signed out";
 }
@@ -115,6 +116,7 @@ function authStatusMeta(session) {
     return session.publicDemo?.resetsAt ? `Resets at ${session.publicDemo.resetsAt}` : "Resets daily";
   }
   if (session.authenticated && session.mode === "demo") return "Local mode";
+  if (session.authenticated && session.mode === "ldap") return "Verified LDAPS sign in";
   if (session.authenticated) return "Secure session";
   return "Sign in required";
 }
@@ -374,6 +376,7 @@ const manageMenuItems = [
   {label: "Projects", href: "/app/projects", meta: "Delivery records"},
   {label: "Meetings", href: "/app/meetings", meta: "Project agendas and minutes"},
   {label: "Documents", href: "/app/documents", meta: "Workspace library"},
+  {label: "Integrations", href: "/app/integrations", meta: "Connectors, repositories, sharing, and webhooks"},
   {label: "Workflows", href: "/app/admin?section=workflow", meta: "Task types, statuses, transitions"},
   {label: "Settings", href: "/app/admin?section=profile", meta: "Profile and account configuration"},
   {label: "Security & secrets", href: "/app/admin?section=security", meta: "Authentication and protected config"},
@@ -453,6 +456,15 @@ const intakeGroupList = ["ideas", "bugs", "maintenance", "ready"];
 const projectStatusList = ["proposed", "active", "paused", "complete", "archived"];
 const healthStateList = ["on-track", "watch", "at-risk", "blocked"];
 const priorityList = ["low", "medium", "high", "critical"];
+function workPriorityOptions(capabilities = {}, current = "") {
+  const configured = (capabilities.priorities ?? []).filter((priority) => priority.active !== false).map((priority) => ({value: priority.id, label: priority.name ?? priority.label ?? titleCase(priority.id)}));
+  const options = configured.length ? configured : priorityList.map((value) => ({value, label: titleCase(value)}));
+  if (current && !options.some((option) => option.value === current)) options.push({value: current, label: titleCase(current)});
+  return options;
+}
+const projectModuleOptions = ["work", "meetings", "documents", "time", "wiki", "news", "forums"]
+  .map((value) => ({value, label: titleCase(value)}));
+const workRelationTypeList = ["predecessor", "successor", "blocks", "blocked-by", "duplicates", "duplicated-by", "related"];
 const lifecyclePhaseList = ["Proposed", "Approved", "Planning", "Execution", "Closing", "Closed"];
 const accountTypeOptions = [
   {value: "personal", label: "Personal"},
@@ -579,6 +591,23 @@ function parseKeyValueLines(text = "") {
     .filter(([key]) => key));
 }
 
+function formatWorkRelations(relations = [], byId = new Map()) {
+  return relations.map((relation) => `${relation.type}: ${byId.get(relation.targetId)?.title ?? relation.targetId}${relation.lagDays ? `: ${relation.lagDays}` : ""}`).join("\n");
+}
+
+function parseWorkRelationLines(text = "", workItems = []) {
+  const titleIds = new Map(workItems.map((item) => [String(item.title).toLowerCase(), item.id]));
+  return String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [rawType, rawTarget, rawLag] = line.split(":").map((part) => part.trim());
+    const type = rawType.toLowerCase().replaceAll(" ", "-");
+    if (!workRelationTypeList.includes(type) || !rawTarget) throw new Error(`Use relation lines like "predecessor: task-id: 2". Invalid line: ${line}`);
+    const targetId = titleIds.get(rawTarget.toLowerCase()) ?? rawTarget;
+    const lagDays = rawLag ? Number(rawLag) : 0;
+    if (!Number.isInteger(lagDays) || lagDays < -3650 || lagDays > 3650) throw new Error(`Relation lag must be a whole number of days: ${line}`);
+    return {type, targetId, lagDays};
+  });
+}
+
 function formValues(form) {
   const data = {};
   for (const [key, value] of new FormData(form).entries()) {
@@ -603,6 +632,19 @@ function memberName(memberships = [], userId) {
   if (!userId) return "Unassigned";
   const match = memberships.find((membership) => membership.userId === userId);
   return match?.name ?? match?.email ?? userId;
+}
+
+function teamOptions(capabilities = {}) {
+  return [
+    {value: "", label: "No team"},
+    ...(capabilities.groups ?? []).map((group) => ({value: group.id, label: group.name ?? group.label ?? group.id}))
+  ];
+}
+
+function teamName(capabilities = {}, teamId) {
+  if (!teamId) return "No team";
+  const match = (capabilities.groups ?? []).find((group) => group.id === teamId);
+  return match?.name ?? match?.label ?? teamId;
 }
 
 function csvValues(value = "") {
@@ -980,6 +1022,12 @@ export function initializeTopMenuBar(bar) {
 }
 
 export function workspaceTopNav() {
+  let cachedBranding = {};
+  try {
+    cachedBranding = JSON.parse(localStorage.getItem("teamspaces.workspaceBranding") ?? "{}");
+  } catch {
+    // Use the product identity until workspace branding is loaded.
+  }
   const sessionHost = el("div", {class: "workspace-top-nav__session"}, headerSessionControls(undefined));
   const createMenu = headerMenu("Create", createMenuItems, {icon: "add"});
   const manageMenu = headerMenu("Manage", manageMenuItems, {icon: "sliders"});
@@ -987,7 +1035,8 @@ export function workspaceTopNav() {
   const bar = initializeTopMenuBar(el("header", {class: "workspace-top-nav app-header"}, [
     el("div", {class: "app-header__bar"}, [
       el("a", {class: "app-header__brand", href: "/app"}, [
-        el("strong", {}, "Team Spaces"),
+        cachedBranding.logoUrl ? el("img", {class: "app-header__brand-logo", src: cachedBranding.logoUrl, alt: ""}) : "",
+        el("strong", {}, cachedBranding.organizationName || "Team Spaces"),
         el("span", {}, "Workspace")
       ]),
       el("div", {class: "app-header__menus"}, [
@@ -999,6 +1048,14 @@ export function workspaceTopNav() {
     ]),
     noticeHost
   ]));
+  const capabilityListener = (event) => {
+    if (!bar.isConnected) {
+      window.removeEventListener("teamspaces:capabilities", capabilityListener);
+      return;
+    }
+    applyWorkspaceCapabilities(event.detail ?? {});
+  };
+  window.addEventListener("teamspaces:capabilities", capabilityListener);
   handleAuthCallback()
     .catch(() => undefined)
     .then(() => currentSession())
@@ -1520,6 +1577,23 @@ export function dashboardAssignments(items = []) {
   ]);
 }
 
+export function workspaceDashboard(data, assignments = [], activity = []) {
+  const configured = data.capabilities?.dashboard?.widgets ?? ["my-work", "project-health", "upcoming", "activity"];
+  const widgets = configured.map((widget) => typeof widget === "string" ? {id: widget, type: widget} : widget).filter((widget) => widget.enabled !== false);
+  const upcoming = [...data.projects].filter((project) => project.targetDate).sort((a, b) => String(a.targetDate).localeCompare(String(b.targetDate))).slice(0, 8);
+  const render = (widget) => {
+    const type = widget.type ?? widget.id;
+    if (type === "my-work") return dashboardAssignments(assignments);
+    if (["project-health", "needs-attention"].includes(type)) return dashboardFocus(data);
+    if (type === "upcoming") return actionPanel(widget.title ?? "Upcoming project targets", upcoming.length ? projectTable(upcoming, {portfolios: data.portfolios}) : emptyView("No project targets are scheduled."), {open: true, meta: `${upcoming.length} projects`});
+    if (type === "activity") return actionPanel(widget.title ?? "Recent activity", activityList(activity.slice(0, Number(widget.limit ?? 10))), {open: true, meta: `${Math.min(activity.length, Number(widget.limit ?? 10))} changes`});
+    if (["projects", "project-list"].includes(type)) return actionPanel(widget.title ?? "Projects", projectTable(data.projects, {portfolios: data.portfolios}), {open: true, meta: `${data.projects.length} projects`});
+    if (type === "portfolio-summary") return dataTable(["Portfolio signal", "Value"], [["Active projects", data.summary?.totalActiveProjects ?? 0], ["At risk", data.summary?.atRiskProjects ?? 0], ["Open work", data.summary?.planning?.totalItems ?? 0]]);
+    return el("section", {class: "public-demo-feature-notice", role: "note"}, `Dashboard widget “${type}” is configured but has no renderer.`);
+  };
+  return el("section", {class: "workspace-dashboard", "data-widget-count": widgets.length}, widgets.map(render));
+}
+
 function saveStatus(form, text, kind = "") {
   let status = form.querySelector(".form-status");
   if (!status) {
@@ -1553,27 +1627,42 @@ export function createPortfolioForm(client, {onSaved} = {}) {
   return form;
 }
 
+function configuredLifecyclePhases(capabilities = {}) {
+  const phases = capabilities.lifecycle?.phases ?? [];
+  return phases.length ? phases.map((phase) => ({value: phase.label ?? phase.id, label: phase.label ?? titleCase(phase.id)})) : lifecyclePhaseList;
+}
+
 export function createProjectForm(client, data, {onSaved} = {}) {
   const portfolioOptions = [{value: "", label: "None"}, ...data.portfolios.map((item) => ({value: item.id, label: item.name}))];
   const owners = memberOptions(data.memberships ?? []);
+  const parentOptions = projectOptions(data.projects ?? [], "No parent project");
+  const modules = multiSelectInput("modules", projectModuleOptions, projectModuleOptions.map(({value}) => value));
+  const template = el("input", {name: "template", type: "checkbox"});
   const form = el("form", {class: "editor-form editor-form--wide"}, [
     field("Name", textInput("name", "Customer onboarding pilot")),
     field("Description", textareaInput("description", "What outcome should this project deliver?")),
     field("Portfolio", selectInput("portfolioId", portfolioOptions)),
+    field("Parent project", selectInput("parentProjectId", parentOptions)),
     field("Owner", selectInput("ownerId", owners)),
     field("Status", selectInput("status", projectStatusList, "active")),
     field("Health", selectInput("health", healthStateList, "on-track")),
     field("Priority", selectInput("priority", priorityList, "medium")),
-    field("Phase", selectInput("phase", lifecyclePhaseList, "Planning")),
+    field("Phase", selectInput("phase", configuredLifecyclePhases(data.capabilities), data.capabilities?.lifecycle?.phases?.[0]?.label ?? "Planning")),
     field("Start", el("input", {name: "startDate", type: "date"})),
     field("Target", el("input", {name: "targetDate", type: "date"})),
     field("Progress", el("input", {name: "percentComplete", type: "number", min: "0", max: "100", value: "0"})),
+    field("Modules", modules),
+    field("Reusable template", el("span", {class: "check-row"}, [template, "List this project as a reusable template"])),
+    ...configuredCustomFieldEditors(data.capabilities, {}, "project"),
     field("Tags", textInput("tags", "pilot, launch")),
     el("button", {class: "button button--primary", type: "submit"}, "Create project")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = formValues(form);
+    formData.modules = [...modules.selectedOptions].map((option) => option.value);
+    formData.template = template.checked;
+    formData.customFields = configuredCustomFieldValues(formData, data.capabilities, {}, "project");
     try {
       await client.projects.create(formData, {idempotencyKey: crypto.randomUUID()});
       form.reset();
@@ -1587,25 +1676,37 @@ export function createProjectForm(client, data, {onSaved} = {}) {
 }
 
 export function projectEditForm(client, project, data = {}, memberships = [], {onSaved} = {}) {
+  const capabilities = data.capabilities ?? {};
   const portfolioOptions = [{value: "", label: "None"}, ...(data.portfolios ?? []).map((item) => ({value: item.id, label: item.name}))];
+  const parentOptions = projectOptions((data.projects ?? []).filter((item) => item.id !== project.id), "No parent project");
+  const modules = multiSelectInput("modules", projectModuleOptions, project.modules ?? projectModuleOptions.map(({value}) => value));
+  const template = el("input", {name: "template", type: "checkbox"});
+  template.checked = Boolean(project.template);
   const form = el("form", {class: "editor-form editor-form--wide"}, [
     field("Name", textInput("name", "Project name", project.name ?? "")),
     field("Description", textareaInput("description", "Project description", project.description ?? "")),
     field("Portfolio", selectInput("portfolioId", portfolioOptions, project.portfolioId ?? "")),
+    field("Parent project", selectInput("parentProjectId", parentOptions, project.parentProjectId ?? "")),
     field("Owner", selectInput("ownerId", memberOptions(memberships), project.ownerId ?? "")),
     field("Status", selectInput("status", projectStatusList, project.status ?? "active")),
     field("Health", selectInput("health", healthStateList, project.health ?? "on-track")),
     field("Priority", selectInput("priority", priorityList, project.priority ?? "medium")),
-    field("Phase", selectInput("phase", lifecyclePhaseList, project.phase ?? "Planning")),
+    field("Phase", selectInput("phase", configuredLifecyclePhases(data.capabilities), project.phase ?? "Planning")),
     field("Start", el("input", {name: "startDate", type: "date", value: formatDate(project.startDate)})),
     field("Target", el("input", {name: "targetDate", type: "date", value: formatDate(project.targetDate)})),
     field("Progress", el("input", {name: "percentComplete", type: "number", min: "0", max: "100", value: String(project.percentComplete ?? 0)})),
+    field("Modules", modules),
+    field("Reusable template", el("span", {class: "check-row"}, [template, "List this project as a reusable template"])),
+    ...configuredCustomFieldEditors(capabilities, project.customFields ?? {}, "project"),
     field("Tags", textInput("tags", "pilot, launch", csvList(project.tags))),
     el("button", {class: "button button--primary", type: "submit"}, "Save project")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
+    data.modules = [...modules.selectedOptions].map((option) => option.value);
+    data.template = template.checked;
+    data.customFields = configuredCustomFieldValues(data, capabilities, project.customFields ?? {}, "project");
     data.version = project.version;
     try {
       await client.projects.patch(project.id, data);
@@ -1616,6 +1717,146 @@ export function projectEditForm(client, project, data = {}, memberships = [], {o
     }
   });
   return form;
+}
+
+export function projectLifecycleControls(client, project, {onSaved} = {}) {
+  const status = el("p", {class: "form-status", role: "status", "aria-live": "polite"});
+  const favorite = el("button", {class: "button", type: "button"}, project.favorite ? "Remove favorite" : "Add favorite");
+  const archive = el("button", {class: "button", type: "button"}, project.archived ? "Restore project" : "Archive project");
+  const copyName = textInput("copyName", "Copy name", `${project.name} copy`);
+  const includeTasks = el("input", {name: "includeTasks", type: "checkbox"});
+  includeTasks.checked = true;
+  const copy = el("button", {class: "button button--primary", type: "button"}, "Copy project");
+  const confirmDelete = el("input", {name: "confirmDelete", type: "checkbox"});
+  const remove = el("button", {class: "button", type: "button", disabled: "true"}, "Delete project");
+  confirmDelete.addEventListener("change", () => { remove.disabled = !confirmDelete.checked; });
+  const run = async (button, action, success) => {
+    button.disabled = true;
+    status.className = "form-status";
+    status.textContent = "Saving...";
+    try {
+      await action();
+      status.className = "form-status ok";
+      status.textContent = success;
+      onSaved?.();
+    } catch (error) {
+      button.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
+  };
+  favorite.addEventListener("click", () => run(favorite, () => client.projects.patch(project.id, {version: project.version, favorite: !project.favorite}), "Favorite updated."));
+  archive.addEventListener("click", () => run(archive, () => project.archived
+    ? client.projects.restore(project.id, {version: project.version})
+    : client.projects.archive(project.id, {version: project.version}), project.archived ? "Project restored." : "Project archived."));
+  copy.addEventListener("click", () => run(copy, async () => {
+    const created = await client.projects.copy(project.id, {name: copyName.value, includeTasks: includeTasks.checked});
+    location.href = projectHref(created.id);
+  }, "Project copied."));
+  remove.addEventListener("click", () => run(remove, async () => {
+    await client.projects.delete(project.id, {version: project.version});
+    location.href = "/app/projects";
+  }, "Project deleted."));
+  return el("section", {class: "lifecycle-controls"}, [
+    el("div", {class: "button-row"}, [favorite, archive]),
+    field("Copy name", copyName),
+    field("Copy options", el("span", {class: "check-row"}, [includeTasks, "Include up to 100 tasks"])),
+    copy,
+    el("details", {class: "danger-zone"}, [
+      el("summary", {}, "Delete project"),
+      el("p", {}, "Deleted projects are removed from normal views. Subprojects must be moved or deleted first."),
+      el("label", {class: "check-row"}, [confirmDelete, "I understand this action removes the project"]),
+      remove
+    ]),
+    status
+  ]);
+}
+
+function initiationRequestField(definition) {
+  const name = `request__${definition.id}`;
+  if (definition.type === "date") return el("input", {name, type: "date", required: definition.required ? "true" : undefined});
+  if (definition.type === "boolean") return selectInput(name, [{value: "", label: "Not set"}, {value: "true", label: "Yes"}, {value: "false", label: "No"}], "");
+  if (definition.type === "select") return selectInput(name, [{value: "", label: "Select"}, ...customFieldOptions(definition.options)], "");
+  return definition.multiline ? textareaInput(name, definition.helpText ?? "") : el("input", {name, type: definition.type === "number" ? "number" : "text", placeholder: definition.helpText ?? "", required: definition.required ? "true" : undefined});
+}
+
+export function projectInitiationPanel(client, project, capabilities = {}, {onSaved, currentUserId = ""} = {}) {
+  const configuration = capabilities.lifecycle?.initiation ?? {};
+  if (!configuration.enabled) return emptyView("Project initiation is not enabled for this workspace.");
+  const status = badge(project.initiationStatus ?? "draft", project.initiationStatus === "approved" ? "good" : project.initiationStatus === "rejected" ? "danger" : "watch");
+  const form = el("form", {class: "editor-form"}, [
+    ...((configuration.requestFields ?? []).map((definition) => field(`${definition.name ?? titleCase(definition.id)}${definition.required ? " *" : ""}`, initiationRequestField(definition)))),
+    field("Submission note", textareaInput("note", "Context for reviewers")),
+    el("button", {class: "button button--primary", type: "submit", disabled: ["submitted", "approved"].includes(project.initiationStatus) ? "true" : undefined}, project.initiationStatus === "changes-requested" ? "Resubmit request" : "Submit for review")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = formValues(form);
+    const requestData = {};
+    for (const definition of configuration.requestFields ?? []) {
+      let value = values[`request__${definition.id}`];
+      if (definition.type === "boolean" && value !== "") value = value === "true";
+      if (definition.type === "number" && value !== "") value = Number(value);
+      if (value !== "" && value !== undefined) requestData[definition.id] = value;
+    }
+    try {
+      await client.projects.submitInitiation(project.id, {version: project.version, requestData, templateProjectId: configuration.templateProjectId || undefined, note: values.note});
+      saveStatus(form, "Initiation request submitted.", "ok");
+      onSaved?.();
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  const review = el("form", {class: "editor-form"}, [
+    field("Review comment", textareaInput("comment", "Decision rationale")),
+    el("div", {class: "button-row"}, ["approved", "changes-requested", "rejected"].map((decision) => {
+      const button = el("button", {class: decision === "approved" ? "button button--primary" : "button", type: "button", disabled: ["submitted", "changes-requested"].includes(project.initiationStatus) ? undefined : "true"}, titleCase(decision));
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await client.projects.reviewInitiation(project.id, {version: project.version, decision, comment: new FormData(review).get("comment")});
+          saveStatus(review, `Request ${decision.replaceAll("-", " ")}.`, decision === "approved" ? "ok" : "error");
+          onSaved?.();
+        } catch (error) {
+          button.disabled = false;
+          saveStatus(review, error.message, "error");
+        }
+      });
+      return button;
+    }))
+  ]);
+  const reviewerIds = configuration.reviewerIds ?? [];
+  const canReview = !reviewerIds.length || reviewerIds.includes(currentUserId);
+  return el("section", {class: "project-initiation"}, [
+    el("div", {class: "badge-row"}, [status, project.templateSourceProjectId ? badge("Template applied", "info") : ""]),
+    project.initiationRequest ? dataTable(["Submission", "Value"], [["Submitted by", project.initiationRequest.submittedBy], ["Submitted", formatDate(project.initiationRequest.submittedAt)], ["Template", project.initiationRequest.templateProjectId ?? "None"], ...Object.entries(project.initiationRequest.requestData ?? {}).map(([key, value]) => [titleCase(key), Array.isArray(value) ? value.join(", ") : String(value)])]) : "",
+    form,
+    canReview ? actionPanel("Review request", review, {open: project.initiationStatus === "submitted", meta: `${(project.initiationApprovals ?? []).length} decisions`}) : el("p", {}, "A configured reviewer must decide this request."),
+    project.initiationAuditArtifact ? el("details", {}, [el("summary", {}, "Audit artifact"), el("pre", {}, JSON.stringify(project.initiationAuditArtifact, null, 2))]) : ""
+  ]);
+}
+
+export function projectLifecycleGatesPanel(client, project, capabilities = {}, {onSaved, currentUserId = ""} = {}) {
+  const phases = capabilities.lifecycle?.phases ?? [];
+  const approvals = new Map((project.lifecycleGateApprovals ?? []).map((approval) => [approval.gateId, approval]));
+  const rows = phases.flatMap((phase) => (phase.gates ?? []).map((rawGate) => {
+    const gate = typeof rawGate === "string" ? {id: rawGate, name: titleCase(rawGate)} : rawGate;
+    const approval = approvals.get(gate.id);
+    const canReview = !gate.reviewerIds?.length || gate.reviewerIds.includes(currentUserId);
+    const approve = el("button", {class: "button", type: "button", disabled: approval || !canReview ? "true" : undefined}, approval ? "Approved" : canReview ? "Approve" : "Reviewer required");
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      try {
+        await client.projects.approveGate(project.id, gate.id, {version: project.version, comment: "Approved from project lifecycle panel"});
+        onSaved?.();
+      } catch (error) {
+        approve.disabled = false;
+        approve.textContent = error.message;
+      }
+    });
+    return [phase.label ?? phase.id, gate.name ?? gate.id, gate.description ?? "", approval ? `${approval.reviewerId} · ${formatDate(approval.approvedAt)}` : "Pending", approve];
+  }));
+  return rows.length ? dataTable(["Destination phase", "Gate", "Evidence", "Approval", ""], rows) : emptyView("No lifecycle gates are configured.");
 }
 
 export function projectTeamPanel(project, items = [], memberships = []) {
@@ -1682,8 +1923,13 @@ export function projectOverview(project, memberships = []) {
       ["Progress", progressBar(project.percentComplete)],
       ["Target", formatDate(project.targetDate) || "Not set"],
       ["Owner", memberName(memberships, project.ownerId)],
+      ["Parent project", project.parentProjectId || "Top level"],
+      ["Modules", (project.modules ?? projectModuleOptions.map(({value}) => value)).map(titleCase).join(", ")],
+      ["Template", project.template ? "Reusable template" : "Standard project"],
+      ["Favorite", project.favorite ? "Yes" : "No"],
       ["Start", formatDate(project.startDate) || "Not set"],
       ["Updated", formatDate(project.updatedAt) || ""],
+      ...Object.entries(project.customFields ?? {}).map(([name, value]) => [titleCase(name.replace(/__score$/, " score")), Array.isArray(value) ? value.join(", ") : String(value)]),
       ["Tags", (project.tags ?? []).join(", ")]
     ])
   ]);
@@ -1869,7 +2115,7 @@ function groupedPlanningView(items, groupBy, memberships = []) {
   )));
 }
 
-export function projectPlanningViews(project, items = [], client, {onSaved, memberships = []} = {}) {
+export function projectPlanningViews(project, items = [], client, {onSaved, memberships = [], capabilities = {}} = {}) {
   const root = el("section", {class: "project-planning", id: "task-views"});
   const layout = selectInput("layout", [
     {value: "table", label: "Table"},
@@ -1920,6 +2166,7 @@ export function projectPlanningViews(project, items = [], client, {onSaved, memb
   const bulkEditor = workItemBulkEditor(client, items, {
     selectedIds,
     memberships,
+    capabilities,
     onSaved,
     onRender: () => render?.()
   });
@@ -1945,14 +2192,15 @@ export function projectPlanningViews(project, items = [], client, {onSaved, memb
     if (!visible.length) view = emptyView("No tasks match this view.");
     else if (state.groupBy !== "none" && !["roadmap", "gantt"].includes(state.layout)) view = groupedPlanningView(visible, state.groupBy, memberships);
     else if (state.layout === "board") view = workItemKanban(visible, client, {onSaved});
-    else if (state.layout === "gantt") view = workGanttView(visible);
+    else if (state.layout === "gantt") view = workGanttView(visible, client, {onSaved});
     else if (state.layout === "calendar") view = workCalendarView(visible);
     else if (state.layout === "roadmap") view = projectRoadmapPanel(visible);
     else view = el("section", {class: "bulk-work-list"}, [
       bulkEditor.node,
       workItemTable(visible, {
         selectedIds,
-        onSelectionChange: (selection) => bulkEditor.sync(selection)
+        onSelectionChange: (selection) => bulkEditor.sync(selection),
+        capabilities
       })
     ]);
     content.replaceChildren(
@@ -1996,14 +2244,107 @@ export function projectPlanningViews(project, items = [], client, {onSaved, memb
   return root;
 }
 
-function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memberships = [], workItems = []} = {}) {
+function customFieldDefinitions(capabilities = {}, entityType = "work-item") {
+  return (capabilities.customFields ?? []).filter((definition) => (definition.entityType ?? "work-item") === entityType);
+}
+
+function customFieldOptions(options = [], depth = 0) {
+  return options.flatMap((option) => {
+    const value = option.id ?? option.value ?? option;
+    const label = `${"— ".repeat(depth)}${option.name ?? option.label ?? option.value ?? option.id ?? option}`;
+    return [{value, label}, ...customFieldOptions(option.children ?? [], depth + 1)];
+  });
+}
+
+function configuredCustomFieldInput(definition, value) {
+  const name = `custom__${definition.id}`;
+  const attrs = {name, required: definition.required ? "true" : undefined};
+  if (definition.type === "calculated") return el("output", {class: "calculated-field"}, value ?? "Calculated when saved");
+  if (definition.multiSelect && ["select", "user", "version"].includes(definition.type)) {
+    const options = customFieldOptions(definition.options);
+    return options.length ? multiSelectInput(name, options, value ?? []) : textInput(name, "Comma-separated identifiers", Array.isArray(value) ? value.join(", ") : value ?? "");
+  }
+  if (["select", "weighted"].includes(definition.type)) return selectInput(name, [{value: "", label: "Select"}, ...customFieldOptions(definition.options)], value ?? "");
+  if (["multi-select", "hierarchy"].includes(definition.type)) return multiSelectInput(name, customFieldOptions(definition.options), value ?? []);
+  if (definition.type === "boolean") return selectInput(name, [{value: "", label: "Not set"}, {value: "true", label: "Yes"}, {value: "false", label: "No"}], value === true ? "true" : value === false ? "false" : "");
+  if (definition.type === "date") return el("input", {...attrs, type: "date", value: value ?? ""});
+  if (definition.type === "long-text") return el("textarea", {...attrs, rows: "4"}, value ?? "");
+  if (definition.type === "link") return el("input", {...attrs, type: "url", value: value ?? ""});
+  if (["integer", "decimal"].includes(definition.type)) return el("input", {...attrs, type: "number", step: definition.type === "integer" ? "1" : "any", value: value ?? ""});
+  return el("input", {...attrs, type: "text", value: value ?? "", placeholder: definition.helpText ?? definition.name ?? definition.id});
+}
+
+function configuredCustomFieldEditors(capabilities = {}, values = {}, entityType = "work-item") {
+  return customFieldDefinitions(capabilities, entityType).map((definition) => {
+    const control = field(`${definition.name ?? titleCase(definition.id)}${definition.required ? " *" : ""}`, configuredCustomFieldInput(definition, values[definition.id]));
+    if (definition.helpText) control.append(el("small", {class: "field-help"}, definition.helpText));
+    return control;
+  });
+}
+
+function configuredWorkForm(capabilities = {}, typeId = "") {
+  return (capabilities.forms ?? []).find((form) => {
+    if (form.entityType && form.entityType !== "work-item") return false;
+    const typeIds = form.typeIds ?? (form.typeId ? [form.typeId] : []);
+    return !typeIds.length || typeIds.includes(typeId);
+  });
+}
+
+function applyConfiguredWorkForm(formElement, capabilities = {}, typeId = "", {applyDefaults = false} = {}) {
+  const definition = configuredWorkForm(capabilities, typeId);
+  formElement.querySelector(".configured-form-note")?.remove();
+  for (const label of formElement.querySelectorAll("label.field")) {
+    label.hidden = false;
+    label.querySelector(".configured-form-help")?.remove();
+  }
+  if (!definition) return;
+  const fields = definition.fields ?? definition.fieldIds ?? [];
+  const normalized = fields.map((entry) => typeof entry === "string" ? {id: entry} : {id: entry.id ?? entry.fieldId ?? entry.name, ...entry}).filter((entry) => entry.id);
+  const byId = new Map(normalized.map((entry) => [String(entry.id), entry]));
+  const core = new Set(["projectId", "title", "type", "status"]);
+  if (normalized.length) {
+    for (const control of formElement.querySelectorAll("input[name], select[name], textarea[name]")) {
+      const name = control.name.startsWith("custom__") ? control.name.slice(8) : control.name;
+      const config = byId.get(name);
+      const label = control.closest("label.field");
+      if (label) label.hidden = !core.has(control.name) && (!config || config.visible === false);
+      if (config?.required) control.required = true;
+      if (config?.helpText && label) label.append(el("small", {class: "field-help configured-form-help"}, config.helpText));
+      if (applyDefaults && definition.defaults && Object.hasOwn(definition.defaults, name) && !control.value) control.value = String(definition.defaults[name] ?? "");
+    }
+  }
+  formElement.prepend(el("p", {class: "configured-form-note"}, `Form: ${definition.name ?? definition.label ?? definition.id}${definition.description ? ` — ${definition.description}` : ""}`));
+}
+
+function configuredCustomFieldValues(data, capabilities = {}, current = {}, entityType = "work-item") {
+  const values = {...current};
+  for (const definition of customFieldDefinitions(capabilities, entityType)) {
+    const key = `custom__${definition.id}`;
+    if (definition.type === "calculated") continue;
+    let value = data[key];
+    delete data[key];
+    if (["multi-select", "hierarchy"].includes(definition.type) || definition.multiSelect && ["select", "user", "version"].includes(definition.type)) {
+      value = (Array.isArray(value) ? value : csvValues(value)).filter(Boolean);
+    }
+    else if (definition.type === "boolean") value = value === "" || value === undefined ? undefined : value === "true";
+    else if (definition.type === "integer") value = value === "" || value === undefined ? undefined : Number.parseInt(value, 10);
+    else if (definition.type === "decimal") value = value === "" || value === undefined ? undefined : Number(value);
+    if (value === "" || value === undefined) delete values[definition.id];
+    else values[definition.id] = value;
+  }
+  return values;
+}
+
+function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memberships = [], workItems = [], capabilities = {}} = {}) {
   const linkedTaskOptions = taskOptions(workItems, selectedProjectId, "No linked task").slice(1);
   const projectSelect = selectInput("projectId", projectOptions(projects), selectedProjectId);
+  const relationLines = textareaInput("relations", "predecessor: task-id: 0\nrelated: another-task-id");
   const form = el("form", {class: "editor-form editor-form--wide task-create-form"}, [
     field("Project", projectSelect),
     field("Task", textInput("title", "Create stakeholder review")),
     field("Status", selectInput("status", workStatusOptions(), configuredDefaultStatusId)),
     field("Assignee", selectInput("assigneeId", memberOptions(memberships))),
+    field("Team", selectInput("teamId", teamOptions(capabilities))),
     field("Due", el("input", {name: "dueDate", type: "date"})),
     field("Notes", textareaInput("description", "Decision, change, or outcome needed.")),
     el("details", {class: "advanced-panel task-create-form__more"}, [
@@ -2013,9 +2354,15 @@ function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memb
       ]),
       el("div", {class: "task-create-form__advanced"}, [
         field("Task type", selectInput("type", workTypeOptions(), configuredDefaultTypeId)),
-        field("Priority", selectInput("priority", priorityList, "medium")),
+        field("Priority", selectInput("priority", workPriorityOptions(capabilities), "medium")),
+        field("Accountable", selectInput("accountableId", memberOptions(memberships))),
         field("Effort points", el("input", {name: "effortPoints", type: "number", min: "0", max: "100", value: "0"})),
         field("Estimate minutes", el("input", {name: "estimateMinutes", type: "number", min: "0", max: "100000", value: "0"})),
+        field("Remaining minutes", el("input", {name: "remainingMinutes", type: "number", min: "0", max: "100000", value: "0"})),
+        field("Progress", el("input", {name: "percentComplete", type: "number", min: "0", max: "100", value: "0"})),
+        field("Scheduling", selectInput("schedulingMode", [{value: "manual", label: "Manual"}, {value: "automatic", label: "Automatic"}], "manual")),
+        field("Category", textInput("category", "Delivery")),
+        field("Version", textInput("versionName", "1.0")),
         field("Time period", textInput("periodName", "Launch window")),
         field("Period goal", textInput("periodGoal", "Validated delivery outcome")),
         field("Intake group", selectInput("intakeGroup", [{value: "", label: "None"}, ...intakeGroupList.map((value) => ({value, label: intakeGroupLabel(value)}))])),
@@ -2025,14 +2372,18 @@ function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memb
         linkedTaskOptions.length ? field("Parent", selectInput("parentId", [{value: "", label: "None"}, ...linkedTaskOptions])) : "",
         linkedTaskOptions.length ? field("Blocked by", multiSelectInput("blockedBy", linkedTaskOptions)) : "",
         linkedTaskOptions.length ? field("Related", multiSelectInput("relatedIds", linkedTaskOptions)) : "",
+        linkedTaskOptions.length ? field("Typed relations", relationLines) : "",
         field("Watchers", multiSelectInput("watcherIds", memberOptions(memberships, "No watcher").slice(1))),
         field("Start", el("input", {name: "startDate", type: "date"})),
         field("Acceptance criteria", textareaInput("acceptanceCriteria", "What must be true when this is done?")),
+        ...configuredCustomFieldEditors(capabilities),
         field("Tags", textInput("tags", "pilot, planning"))
       ])
     ]),
     el("button", {class: "button button--primary", type: "submit"}, "Create task")
   ]);
+  applyConfiguredWorkForm(form, capabilities, form.elements.type?.value, {applyDefaults: true});
+  form.elements.type?.addEventListener("change", () => applyConfiguredWorkForm(form, capabilities, form.elements.type.value));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
@@ -2046,7 +2397,8 @@ function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memb
     delete data.projectId;
     delete data.workflowStep;
     delete data.workstream;
-    data.customFields = {};
+    data.relations = parseWorkRelationLines(data.relations, workItems.filter((item) => item.projectId === projectId));
+    data.customFields = configuredCustomFieldValues(data, capabilities);
     if (workflowStep) data.customFields.workflowStep = workflowStep;
     if (workstream) data.customFields.workstream = workstream;
     try {
@@ -2062,7 +2414,7 @@ function taskCreateForm(client, projects, {onSaved, selectedProjectId = "", memb
   return form;
 }
 
-export function taskCreatePanel(client, projects = [], {onSaved, selectedProjectId = "", memberships = [], workItems = [], title = "Create task", description = "Tasks are the smallest unit of work. Add one here, then assign it, attach documents, plan dates, and move it through a view.", id = "new-task"} = {}) {
+export function taskCreatePanel(client, projects = [], {onSaved, selectedProjectId = "", memberships = [], workItems = [], capabilities = {}, title = "Create task", description = "Tasks are the smallest unit of work. Add one here, then assign it, attach documents, plan dates, and move it through a view.", id = "new-task"} = {}) {
   const attrs = {class: "task-create-panel"};
   if (id) attrs.id = id;
   return el("section", attrs, [
@@ -2072,7 +2424,7 @@ export function taskCreatePanel(client, projects = [], {onSaved, selectedProject
         description ? el("p", {}, description) : ""
       ])
     ]),
-    taskCreateForm(client, projects, {onSaved, selectedProjectId, memberships, workItems})
+    taskCreateForm(client, projects, {onSaved, selectedProjectId, memberships, workItems, capabilities})
   ]);
 }
 
@@ -2118,17 +2470,24 @@ export function taskCommandCenter(client, projects = [], items = [], {onSaved, s
   ]);
 }
 
-export function workItemForm(client, projectId, {onSaved, workItems = [], memberships = []} = {}) {
+export function workItemForm(client, projectId, {onSaved, workItems = [], memberships = [], capabilities = {}} = {}) {
   const relationOptions = [{value: "", label: "None"}, ...workItems.map((item) => ({value: item.id, label: item.title}))];
   const linkedWorkOptions = workItems.map((item) => ({value: item.id, label: item.title}));
   const form = el("form", {class: "editor-form editor-form--wide"}, [
     field("Task", textInput("title", "Prepare gate review")),
     field("Task type", selectInput("type", workTypeOptions(), configuredDefaultTypeId)),
     field("Status", selectInput("status", workStatusOptions(), configuredDefaultStatusId)),
-    field("Priority", selectInput("priority", priorityList, "medium")),
+    field("Priority", selectInput("priority", workPriorityOptions(capabilities), "medium")),
     field("Assignee", selectInput("assigneeId", memberOptions(memberships))),
+    field("Team", selectInput("teamId", teamOptions(capabilities))),
+    field("Accountable", selectInput("accountableId", memberOptions(memberships))),
     field("Effort points", el("input", {name: "effortPoints", type: "number", min: "0", max: "100", value: "0"})),
     field("Estimate minutes", el("input", {name: "estimateMinutes", type: "number", min: "0", max: "100000", value: "0"})),
+    field("Remaining minutes", el("input", {name: "remainingMinutes", type: "number", min: "0", max: "100000", value: "0"})),
+    field("Progress", el("input", {name: "percentComplete", type: "number", min: "0", max: "100", value: "0"})),
+    field("Scheduling", selectInput("schedulingMode", [{value: "manual", label: "Manual"}, {value: "automatic", label: "Automatic"}], "manual")),
+    field("Category", textInput("category", "Delivery")),
+    field("Version", textInput("versionName", "1.0")),
     field("Time period", textInput("periodName", "Launch window")),
     field("Period goal", textInput("periodGoal", "Validated delivery outcome")),
     field("Intake group", selectInput("intakeGroup", [{value: "", label: "None"}, ...intakeGroupList.map((value) => ({value, label: intakeGroupLabel(value)}))])),
@@ -2137,21 +2496,26 @@ export function workItemForm(client, projectId, {onSaved, workItems = [], member
     field("Parent", selectInput("parentId", relationOptions)),
     field("Blocked by", multiSelectInput("blockedBy", linkedWorkOptions)),
     field("Related", multiSelectInput("relatedIds", linkedWorkOptions)),
+    field("Typed relations", textareaInput("relations", "predecessor: task-id: 0\nrelated: another-task-id")),
     field("Watchers", multiSelectInput("watcherIds", memberOptions(memberships, "No watcher").slice(1))),
     field("Start", el("input", {name: "startDate", type: "date"})),
     field("Due", el("input", {name: "dueDate", type: "date"})),
     field("Notes", textareaInput("description", "What needs to change?")),
     field("Acceptance criteria", textareaInput("acceptanceCriteria", "What must be true when this is done?")),
-    field("Custom fields", textareaInput("customFields", "impact: high\ncomponent: API")),
+    ...configuredCustomFieldEditors(capabilities),
+    customFieldDefinitions(capabilities).length ? "" : field("Custom fields", textareaInput("customFields", "impact: high\ncomponent: API")),
     field("Tags", textInput("tags", "api, launch")),
     el("button", {class: "button button--primary", type: "submit"}, "Create task")
   ]);
+  applyConfiguredWorkForm(form, capabilities, form.elements.type?.value, {applyDefaults: true});
+  form.elements.type?.addEventListener("change", () => applyConfiguredWorkForm(form, capabilities, form.elements.type.value));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
     const workflowStep = String(data.workflowStep ?? "").trim();
     delete data.workflowStep;
-    data.customFields = parseKeyValueLines(data.customFields);
+    data.customFields = customFieldDefinitions(capabilities).length ? configuredCustomFieldValues(data, capabilities) : parseKeyValueLines(data.customFields);
+    data.relations = parseWorkRelationLines(data.relations, workItems);
     if (workflowStep) data.customFields.workflowStep = workflowStep;
     try {
       await client.workItems.create(projectId, data, {idempotencyKey: crypto.randomUUID()});
@@ -2165,19 +2529,27 @@ export function workItemForm(client, projectId, {onSaved, workItems = [], member
   return form;
 }
 
-export function workItemEditForm(client, item, {onSaved, workItems = [], memberships = []} = {}) {
+export function workItemEditForm(client, item, {onSaved, workItems = [], memberships = [], capabilities = {}} = {}) {
   const relatedItems = workItems
     .filter((candidate) => candidate.id !== item.id)
     .map((candidate) => ({value: candidate.id, label: candidate.title}));
   const parentOptions = [{value: "", label: "None"}, ...relatedItems];
+  const byId = new Map(workItems.map((candidate) => [candidate.id, candidate]));
   const form = el("form", {class: "editor-form editor-form--wide work-editor"}, [
     field("Task", textInput("title", "Task title", item.title ?? "")),
     field("Task type", selectInput("type", workTypeOptions(item.type), item.type ?? configuredDefaultTypeId)),
     field("Status", selectInput("status", workStatusOptions(item.status), item.status ?? configuredDefaultStatusId)),
-    field("Priority", selectInput("priority", priorityList, item.priority ?? "medium")),
+    field("Priority", selectInput("priority", workPriorityOptions(capabilities, item.priority), item.priority ?? "medium")),
     field("Assignee", selectInput("assigneeId", memberOptions(memberships), item.assigneeId ?? "")),
+    field("Team", selectInput("teamId", teamOptions(capabilities), item.teamId ?? "")),
+    field("Accountable", selectInput("accountableId", memberOptions(memberships), item.accountableId ?? "")),
     field("Effort points", el("input", {name: "effortPoints", type: "number", min: "0", max: "100", value: String(item.effortPoints ?? 0)})),
     field("Estimate minutes", el("input", {name: "estimateMinutes", type: "number", min: "0", max: "100000", value: String(item.estimateMinutes ?? 0)})),
+    field("Remaining minutes", el("input", {name: "remainingMinutes", type: "number", min: "0", max: "100000", value: String(item.remainingMinutes ?? 0)})),
+    field("Progress", el("input", {name: "percentComplete", type: "number", min: "0", max: "100", value: String(item.percentComplete ?? 0)})),
+    field("Scheduling", selectInput("schedulingMode", [{value: "manual", label: "Manual"}, {value: "automatic", label: "Automatic"}], item.schedulingMode ?? "manual")),
+    field("Category", textInput("category", "Delivery", item.category ?? "")),
+    field("Version", textInput("versionName", "1.0", item.versionName ?? "")),
     field("Time period", textInput("periodName", "Launch window", item.periodName ?? "")),
     field("Period goal", textInput("periodGoal", "Validated delivery outcome", item.periodGoal ?? "")),
     field("Intake group", selectInput("intakeGroup", [{value: "", label: "None"}, ...intakeGroupList.map((value) => ({value, label: intakeGroupLabel(value)}))], item.intakeGroup ?? "")),
@@ -2186,21 +2558,26 @@ export function workItemEditForm(client, item, {onSaved, workItems = [], members
     field("Parent", selectInput("parentId", parentOptions, item.parentId ?? "")),
     field("Blocked by", multiSelectInput("blockedBy", relatedItems, item.blockedBy ?? [])),
     field("Related", multiSelectInput("relatedIds", relatedItems, item.relatedIds ?? [])),
+    field("Typed relations", textareaInput("relations", "predecessor: task-id: 0", formatWorkRelations(item.relations, byId))),
     field("Watchers", multiSelectInput("watcherIds", memberOptions(memberships, "No watcher").slice(1), item.watcherIds ?? [])),
     field("Start", el("input", {name: "startDate", type: "date", value: formatDate(item.startDate)})),
     field("Due", el("input", {name: "dueDate", type: "date", value: formatDate(item.dueDate)})),
     field("Notes", textareaInput("description", "What needs to change?", item.description ?? "")),
     field("Acceptance criteria", textareaInput("acceptanceCriteria", "What must be true when this is done?", item.acceptanceCriteria ?? "")),
-    field("Custom fields", textareaInput("customFields", "impact: high\ncomponent: API", formatKeyValueLines(displayCustomFields(item.customFields, ["workflowStep"])))),
+    ...configuredCustomFieldEditors(capabilities, item.customFields ?? {}),
+    customFieldDefinitions(capabilities).length ? "" : field("Custom fields", textareaInput("customFields", "impact: high\ncomponent: API", formatKeyValueLines(displayCustomFields(item.customFields, ["workflowStep"])))),
     field("Tags", textInput("tags", "api, launch", csvList(item.tags))),
     el("button", {class: "button button--primary", type: "submit"}, "Save task")
   ]);
+  applyConfiguredWorkForm(form, capabilities, item.type);
+  form.elements.type?.addEventListener("change", () => applyConfiguredWorkForm(form, capabilities, form.elements.type.value));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
     const workflowStep = String(data.workflowStep ?? "").trim();
     delete data.workflowStep;
-    data.customFields = parseKeyValueLines(data.customFields);
+    data.customFields = customFieldDefinitions(capabilities).length ? configuredCustomFieldValues(data, capabilities) : parseKeyValueLines(data.customFields);
+    data.relations = parseWorkRelationLines(data.relations, workItems);
     if (workflowStep) data.customFields.workflowStep = workflowStep;
     data.version = item.version;
     try {
@@ -2212,6 +2589,77 @@ export function workItemEditForm(client, item, {onSaved, workItems = [], members
     }
   });
   return form;
+}
+
+function workItemLifecycleActions(client, item, projects = [], {onSaved} = {}) {
+  const status = el("p", {class: "form-status", role: "status", "aria-live": "polite"});
+  const duplicate = el("button", {class: "button", type: "button"}, "Duplicate task");
+  const targetProjects = projects.filter((project) => project.id !== item.projectId && !project.archived && !project.template);
+  const target = selectInput("targetProjectId", projectOptions(targetProjects), "");
+  const move = el("button", {class: "button", type: "button", disabled: "true"}, "Move task");
+  target.addEventListener("change", () => { move.disabled = !target.value; });
+  const confirmDelete = el("input", {type: "checkbox"});
+  const remove = el("button", {class: "button", type: "button", disabled: "true"}, "Delete task");
+  confirmDelete.addEventListener("change", () => { remove.disabled = !confirmDelete.checked; });
+  const run = async (button, action, success) => {
+    button.disabled = true;
+    status.className = "form-status";
+    status.textContent = "Saving...";
+    try {
+      await action();
+      status.className = "form-status ok";
+      status.textContent = success;
+      onSaved?.();
+    } catch (error) {
+      button.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
+  };
+  duplicate.addEventListener("click", () => run(duplicate, () => client.workItems.copy(item.projectId, item.id, {}), "Task duplicated."));
+  move.addEventListener("click", () => run(move, () => client.workItems.move(item.projectId, item.id, {version: item.version, targetProjectId: target.value}), "Task moved."));
+  remove.addEventListener("click", () => run(remove, () => client.workItems.delete(item.projectId, item.id, {version: item.version}), "Task deleted."));
+  return el("section", {class: "lifecycle-controls"}, [
+    duplicate,
+    targetProjects.length ? field("Move to project", target) : el("p", {}, "No other active project is available."),
+    targetProjects.length ? move : "",
+    el("details", {class: "danger-zone"}, [
+      el("summary", {}, "Delete task"),
+      el("p", {}, "Remove hierarchy and relation references before deleting a connected task."),
+      el("label", {class: "check-row"}, [confirmDelete, "I understand this action removes the task"]),
+      remove
+    ]),
+    status
+  ]);
+}
+
+function workItemCustomActions(client, item, capabilities = {}, currentRole = "", {onSaved} = {}) {
+  const actions = (capabilities.customActions ?? []).filter((action) => {
+    const roles = action.roleIds ?? action.roles ?? [];
+    return !roles.length || roles.includes(currentRole);
+  });
+  if (!actions.length) return emptyView("No one-click actions are available for your role.");
+  const status = el("p", {class: "form-status", role: "status", "aria-live": "polite"});
+  return el("section", {class: "custom-action-list"}, [
+    el("div", {class: "button-row"}, actions.map((action) => {
+      const button = el("button", {class: "button", type: "button"}, action.name ?? titleCase(action.id));
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await client.workItems.action(item.projectId, item.id, action.id, {version: item.version});
+          status.className = "form-status ok";
+          status.textContent = `${action.name ?? titleCase(action.id)} applied.`;
+          onSaved?.();
+        } catch (error) {
+          button.disabled = false;
+          status.className = "form-status error";
+          status.textContent = error.message;
+        }
+      });
+      return button;
+    })),
+    status
+  ]);
 }
 
 export const MAX_BULK_WORK_ITEM_SELECTION = 25;
@@ -2266,6 +2714,7 @@ export async function applyBulkWorkItemPatch(client, items, patch, {maxSelection
 function workItemBulkEditor(client, items, {
   selectedIds,
   memberships = [],
+  capabilities = {},
   onSaved,
   onRender,
   maxSelection = MAX_BULK_WORK_ITEM_SELECTION
@@ -2304,7 +2753,7 @@ function workItemBulkEditor(client, items, {
     if (fieldName === "status") {
       valueInput = selectInput("bulkValue", [{value: "", label: "Choose status"}, ...workStatusOptions()]);
     } else if (fieldName === "priority") {
-      valueInput = selectInput("bulkValue", [{value: "", label: "Choose priority"}, ...priorityList]);
+      valueInput = selectInput("bulkValue", [{value: "", label: "Choose priority"}, ...workPriorityOptions(capabilities)]);
     } else if (fieldName === "assigneeId") {
       valueInput = selectInput("bulkValue", [{value: "", label: "Choose assignee"}, ...memberOptions(memberships).slice(1)]);
     } else if (fieldName === "type") {
@@ -2395,37 +2844,39 @@ function workItemBulkEditor(client, items, {
 export function workItemTable(items, {
   selectedIds,
   onSelectionChange,
-  maxSelection = MAX_BULK_WORK_ITEM_SELECTION
+  maxSelection = MAX_BULK_WORK_ITEM_SELECTION,
+  capabilities = {}
 } = {}) {
   const selectable = selectedIds instanceof Set && typeof onSelectionChange === "function";
   const headerCheckbox = selectable
     ? el("input", {class: "work-select__checkbox", type: "checkbox", "aria-label": "Select visible tasks", "data-column-label": "Select"})
     : undefined;
   const rowCheckboxes = new Map();
-  const headers = ["Task", "Type", "Status", "Priority", "Period", "Effort", "Relations", "Assignee", "Due"];
+  const defaultColumns = ["task", "type", "status", "priority", "period", "effort", "relations", "assignee", "due"];
+  const configuredColumns = capabilities.work?.tableColumns?.length ? capabilities.work.tableColumns : defaultColumns;
+  const columnLabel = (column) => ({task: "Task", type: "Type", status: "Status", priority: "Priority", period: "Period", effort: "Effort", relations: "Relations", assignee: "Assignee", accountable: "Accountable", start: "Start", due: "Due", remaining: "Remaining", progress: "Progress", category: "Category", version: "Version", project: "Project"})[column] ?? (String(column).startsWith("custom:") ? titleCase(String(column).slice(7)) : titleCase(column));
+  const highlightFor = (item) => (capabilities.work?.highlightRules ?? []).find((rule) => {
+    const value = String(rule.field ?? "").startsWith("custom:") ? item.customFields?.[String(rule.field).slice(7)] : item[rule.field];
+    if (rule.operator === "contains") return String(value ?? "").toLowerCase().includes(String(rule.value ?? "").toLowerCase());
+    if (rule.operator === "before") return String(value ?? "") < String(rule.value ?? "");
+    if (rule.operator === "after") return String(value ?? "") > String(rule.value ?? "");
+    return String(value ?? "") === String(rule.value ?? "");
+  });
+  const taskCell = (item) => {
+    const highlight = highlightFor(item);
+    return el("div", {class: `object-cell${highlight ? ` work-highlight work-highlight--${highlight.tone ?? "info"}` : ""}`, title: highlight?.label}, [
+      el("a", {href: workItemHref(item)}, item.title),
+      item.projectId ? miniLinks([{label: item.projectName ? `Project: ${item.projectName}` : "Project", href: projectHref(item.projectId)}, {label: "Time", href: `/app/time?projectId=${encodeURIComponent(item.projectId)}`}]) : ""
+    ]);
+  };
+  const relationText = (item) => [...(item.relations ?? []).map((relation) => titleCase(relation.type)), item.parentId ? "Parent" : "", item.blockedBy?.length ? "Blocked" : "", item.relatedIds?.length ? "Related" : ""].filter(Boolean).join(", ");
+  const columnValue = (item, column) => ({
+    task: () => taskCell(item), type: () => badge(workTypeLabel(item.type), "neutral"), status: () => badge(workStatusLabel(item.status), statusTone(item.status)), priority: () => badge(item.priority, statusTone(item.priority)), period: () => item.periodName ?? "", effort: () => Number(item.effortPoints ?? 0), relations: () => relationText(item), assignee: () => item.assigneeName ?? item.assigneeId ?? "", accountable: () => item.accountableName ?? item.accountableId ?? "", start: () => formatDate(item.startDate), due: () => formatDate(item.dueDate), remaining: () => formatHours(item.remainingMinutes), progress: () => `${Number(item.percentComplete ?? 0)}%`, category: () => item.category ?? "", version: () => item.versionName ?? "", project: () => item.projectName ?? item.projectId ?? ""
+  })[column]?.() ?? (String(column).startsWith("custom:") ? item.customFields?.[String(column).slice(7)] ?? "" : item[column] ?? "");
+  const headers = configuredColumns.map(columnLabel);
   if (headerCheckbox) headers.unshift(headerCheckbox);
   const rows = items.map((item) => {
-    const row = [
-      el("div", {class: "object-cell"}, [
-        el("a", {href: workItemHref(item)}, item.title),
-        item.projectId ? miniLinks([
-          {label: item.projectName ? `Project: ${item.projectName}` : "Project", href: projectHref(item.projectId)},
-          {label: "Time", href: `/app/time?projectId=${encodeURIComponent(item.projectId)}`}
-        ]) : ""
-      ]),
-      badge(workTypeLabel(item.type), "neutral"),
-      badge(workStatusLabel(item.status), statusTone(item.status)),
-      badge(item.priority, statusTone(item.priority)),
-      item.periodName ?? "",
-      Number(item.effortPoints ?? 0),
-      [
-        item.parentId ? "Parent" : "",
-        item.blockedBy?.length ? "Blocked" : "",
-        item.relatedIds?.length ? "Related" : ""
-      ].filter(Boolean).join(", "),
-      item.assigneeName ?? item.assigneeId ?? "",
-      formatDate(item.dueDate)
-    ];
+    const row = configuredColumns.map((column) => columnValue(item, column));
     if (selectable) {
       const checkbox = el("input", {
         class: "work-select__checkbox",
@@ -2478,7 +2929,7 @@ export function workItemTable(items, {
   return table;
 }
 
-export function workPackageDetails(items = [], client, {onSaved, memberships = [], documents = []} = {}) {
+export function workPackageDetails(items = [], client, {onSaved, memberships = [], documents = [], projects = [], activities = [], capabilities = {}, currentRole = ""} = {}) {
   if (!items.length) return emptyView("No tasks yet.");
   const byId = new Map(items.map((item) => [item.id, item]));
   const nameFor = (id) => byId.get(id)?.title ?? id;
@@ -2488,6 +2939,7 @@ export function workPackageDetails(items = [], client, {onSaved, memberships = [
     ...items.map((item) => {
       const customRows = Object.entries(item.customFields ?? {}).map(([name, value]) => [titleCase(name), value]);
       const itemDocuments = documents.filter((document) => document.workItemId === item.id);
+      const itemActivity = activities.filter((activity) => activity.entityType === "work-item" && activity.entityId === item.id);
       const detailAttrs = {id: item.id, class: "work-detail"};
       if (item.id === activeId) detailAttrs.open = "true";
       return el("details", detailAttrs, [
@@ -2505,31 +2957,41 @@ export function workPackageDetails(items = [], client, {onSaved, memberships = [
             {label: "Attach document", href: !client?.isPublicDemo && item.projectId ? `/app/documents?projectId=${encodeURIComponent(item.projectId)}&workItemId=${encodeURIComponent(item.id)}` : ""},
             {label: "Open planning board", href: item.projectId ? `/app/planning?projectId=${encodeURIComponent(item.projectId)}` : ""}
           ]),
-          item.description ? el("p", {}, item.description) : "",
+          item.description ? projectContentBody(item.description, {content: item}) : "",
           item.acceptanceCriteria ? el("section", {}, [
             el("h3", {}, "Acceptance criteria"),
-            el("p", {}, item.acceptanceCriteria)
+            projectContentBody(item.acceptanceCriteria, {content: item})
           ]) : "",
           dataTable(["Field", "Value"], [
             ["Assignee", item.assigneeName ?? item.assigneeId ?? "Unassigned"],
+            ["Team", teamName(capabilities, item.teamId)],
+            ["Accountable", memberName(memberships, item.accountableId)],
+            ["Category / version", [item.category, item.versionName].filter(Boolean).join(" / ")],
             ["Time period", item.periodName ?? "Unscheduled"],
             ["Milestone", item.milestoneName ?? "Unplanned"],
             ["Workflow step", item.customFields?.workflowStep ?? "Unassigned"],
             ["Parent", item.parentId ? nameFor(item.parentId) : ""],
             ["Blocked by", (item.blockedBy ?? []).map(nameFor).join(", ")],
             ["Related", (item.relatedIds ?? []).map(nameFor).join(", ")],
+            ["Typed relations", (item.relations ?? []).map((relation) => `${titleCase(relation.type)}: ${nameFor(relation.targetId)}${relation.lagDays ? ` (${relation.lagDays}d)` : ""}`).join(", ")],
             ["Watchers", (item.watcherIds ?? []).map((id) => memberName(memberships, id)).join(", ")],
             ["Estimate", formatHours(item.estimateMinutes)],
-            ["Recorded", formatHours(item.recordedMinutes)]
+            ["Remaining", formatHours(item.remainingMinutes)],
+            ["Recorded", formatHours(item.recordedMinutes)],
+            ["Progress", `${Number(item.percentComplete ?? 0)}% · ${titleCase(item.schedulingMode ?? "manual")}`]
           ]),
           itemDocuments.length ? actionPanel("Linked documents", documentsTable(itemDocuments, client, {onSaved, workItems: items}), {open: true}) : "",
+          actionPanel("Conversation and history", itemActivity.length ? activityList(itemActivity) : emptyView("No task comments or history yet."), {open: itemActivity.length > 0, meta: `${itemActivity.length} events`}),
           client && item.projectId
             ? client.isPublicDemo
               ? publicDemoUploadNotice()
               : actionPanel("Attach document", documentUploadForm(client, item.projectId, {onSaved, selectedWorkItemId: item.id, workItems: items}), {meta: "Connect a file to this task"})
             : "",
           customRows.length ? dataTable(["Custom field", "Value"], customRows) : "",
-          client ? actionPanel("Edit task", workItemEditForm(client, item, {onSaved, workItems: items, memberships}), {open: item.id === activeId}) : ""
+          client && (capabilities.customActions ?? []).length ? actionPanel("One-click actions", workItemCustomActions(client, item, capabilities, currentRole, {onSaved}), {meta: `${(capabilities.customActions ?? []).length} configured`}) : "",
+          client && !(capabilities.work?.readOnlyStatusIds ?? []).includes(item.status) ? actionPanel("Edit task", workItemEditForm(client, item, {onSaved, workItems: items, memberships, capabilities}), {open: item.id === activeId}) : "",
+          client && (capabilities.work?.readOnlyStatusIds ?? []).includes(item.status) ? el("p", {class: "public-demo-feature-notice", role: "note"}, "This task state is read-only. Change its status to edit fields.") : "",
+          client ? actionPanel("Task lifecycle", workItemLifecycleActions(client, item, projects, {onSaved}), {meta: "Duplicate, move, delete"}) : ""
         ])
       ]);
     })
@@ -2666,6 +3128,28 @@ function workGalleryView(items = []) {
     : emptyView("No tasks match this view.");
 }
 
+function shiftedDate(value, days) {
+  const timestamp = dateMillis(value);
+  if (timestamp === undefined) return "";
+  return new Date(timestamp + Number(days) * dayMs).toISOString().slice(0, 10);
+}
+
+export function ganttDatePatch(item, deltaDays, edge = "move") {
+  const startDate = formatDate(item.startDate || item.dueDate);
+  const dueDate = formatDate(item.dueDate || item.startDate);
+  if (!startDate || !dueDate || !Number.isFinite(Number(deltaDays))) return {};
+  const delta = Math.trunc(Number(deltaDays));
+  if (edge === "start") {
+    const next = shiftedDate(startDate, delta);
+    return {startDate: next > dueDate ? dueDate : next, schedulingMode: "manual"};
+  }
+  if (edge === "end") {
+    const next = shiftedDate(dueDate, delta);
+    return {dueDate: next < startDate ? startDate : next, schedulingMode: "manual"};
+  }
+  return {startDate: shiftedDate(startDate, delta), dueDate: shiftedDate(dueDate, delta), schedulingMode: "manual"};
+}
+
 function workTimelineView(items = []) {
   const scheduled = items
     .map((item) => {
@@ -2720,7 +3204,7 @@ function workTimelineView(items = []) {
   return el("section", {class: "timeline-view"}, rows);
 }
 
-function workGanttView(items = []) {
+function workGanttView(items = [], client, {onSaved} = {}) {
   if (!items.length) return emptyView("No tasks match this Gantt view.");
   const ordered = hierarchicalWorkItems(items);
   const scheduleRows = ordered.map(({item, level}) => {
@@ -2766,27 +3250,105 @@ function workGanttView(items = []) {
           item.blockedBy?.length ? `${item.blockedBy.length} blocker${item.blockedBy.length === 1 ? "" : "s"}` : "",
           item.relatedIds?.length ? `${item.relatedIds.length} related` : ""
         ].filter(Boolean).join(" / ");
-        return el("a", {
-          class: `gantt-row gantt-row--${workTone(item)} ${row.critical && !isClosedWorkStatus(item.status) ? "is-critical" : ""}`,
-          href: workItemHref(item)
+        const reschedule = client && item.projectId ? el("form", {class: "gantt-reschedule"}, [
+          el("input", {name: "startDate", type: "date", value: formatDate(item.startDate), "aria-label": `${item.title} start date`}),
+          el("input", {name: "dueDate", type: "date", value: formatDate(item.dueDate), "aria-label": `${item.title} due date`}),
+          selectInput("schedulingMode", [{value: "manual", label: "Manual"}, {value: "automatic", label: "Automatic"}], item.schedulingMode ?? "manual"),
+          el("button", {class: "button", type: "submit"}, "Reschedule")
+        ]) : undefined;
+        reschedule?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const submit = reschedule.querySelector('button[type="submit"]');
+          submit.disabled = true;
+          const values = formValues(reschedule);
+          try {
+            await client.workItems.patch(item.projectId, item.id, {version: item.version, startDate: values.startDate, dueDate: values.dueDate, schedulingMode: values.schedulingMode});
+            saveStatus(reschedule, "Schedule updated.", "ok");
+            onSaved?.();
+          } catch (error) {
+            saveStatus(reschedule, error.message, "error");
+          } finally {
+            submit.disabled = false;
+          }
+        });
+        const task = el("div", {class: "gantt-task", style: `--level: ${Math.min(6, row.level)}`}, [
+          el("a", {class: "gantt-task__title", href: workItemHref(item)}, item.title),
+          el("span", {}, workStatusLabel(item.status ?? configuredDefaultStatusId)),
+          el("span", {}, item.assigneeName ?? item.assigneeId ?? "Unassigned"),
+          el("span", {}, workDurationText(row.start, row.end)),
+          dependencyText ? el("small", {}, dependencyText) : "",
+          reschedule ?? ""
+        ]);
+        const track = el("div", {class: "gantt-track"});
+        const commit = async (target, patch, targetItem = item) => {
+          if (!client || !targetItem.projectId || !Object.keys(patch).length) return;
+          target.setAttribute("aria-busy", "true");
+          try {
+            await client.workItems.patch(targetItem.projectId, targetItem.id, {version: targetItem.version, ...patch});
+            onSaved?.();
+          } catch (error) {
+            saveStatus(reschedule ?? task, error.message, "error");
+          } finally {
+            target.removeAttribute("aria-busy");
+          }
+        };
+        if (row.start === undefined || row.end === undefined) track.append(el("span", {class: "gantt-unscheduled"}, "Unscheduled"));
+        else if (row.milestone) {
+          const milestone = el("span", {class: "gantt-bar gantt-bar--milestone", style: `left: ${offset}%`, title: formatDate(new Date(row.start).toISOString()), draggable: client ? "true" : undefined, tabindex: client ? "0" : undefined, "aria-label": `${item.title} milestone on ${formatDate(new Date(row.start).toISOString())}; drag to reschedule`});
+          milestone.addEventListener("dragstart", (event) => event.dataTransfer?.setData("text/plain", item.id));
+          track.append(milestone);
+        } else {
+          const bar = el("span", {class: `gantt-bar${client ? " is-interactive" : ""}`, style: `left: ${offset}%; width: ${width}%`, draggable: client ? "true" : undefined, tabindex: client ? "0" : undefined, "aria-label": `${item.title}, ${formatDate(new Date(row.start).toISOString())} through ${formatDate(new Date(row.end).toISOString())}; drag to move`}, [
+            el("button", {class: "gantt-bar__handle gantt-bar__handle--start", type: "button", title: "Drag or use arrow keys to change the start date", "aria-label": `Adjust ${item.title} start date`}),
+            el("span", {class: "gantt-bar__fill", style: `width: ${row.progress}%`}),
+            el("span", {class: "gantt-bar__label"}, `${formatDate(new Date(row.start).toISOString())} - ${formatDate(new Date(row.end).toISOString())}`),
+            el("button", {class: "gantt-bar__handle gantt-bar__handle--end", type: "button", title: "Drag or use arrow keys to change the due date", "aria-label": `Adjust ${item.title} due date`})
+          ]);
+          bar.addEventListener("dragstart", (event) => {
+            if (event.target.closest?.(".gantt-bar__handle")) return event.preventDefault();
+            event.dataTransfer?.setData("text/plain", item.id);
+          });
+          const attachHandle = (handle, edge) => {
+            handle.addEventListener("keydown", (event) => {
+              if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+              event.preventDefault();
+              commit(handle, ganttDatePatch(item, event.key === "ArrowLeft" ? -1 : 1, edge));
+            });
+            handle.addEventListener("pointerdown", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const startX = event.clientX;
+              const finish = (pointerEvent) => {
+                window.removeEventListener("pointerup", finish);
+                const pixelsPerDay = Math.max(1, track.getBoundingClientRect().width / totalDays);
+                const delta = Math.round((pointerEvent.clientX - startX) / pixelsPerDay);
+                if (delta) commit(handle, ganttDatePatch(item, delta, edge));
+              };
+              window.addEventListener("pointerup", finish, {once: true});
+            });
+          };
+          attachHandle(bar.querySelector(".gantt-bar__handle--start"), "start");
+          attachHandle(bar.querySelector(".gantt-bar__handle--end"), "end");
+          track.append(bar);
+        }
+        if (client) {
+          track.addEventListener("dragover", (event) => event.preventDefault());
+          track.addEventListener("drop", (event) => {
+            event.preventDefault();
+            const source = items.find((candidate) => candidate.id === event.dataTransfer?.getData("text/plain"));
+            const sourceStart = dateMillis(source?.startDate ?? source?.dueDate);
+            const rectangle = track.getBoundingClientRect();
+            if (!source || sourceStart === undefined || !rectangle.width) return;
+            const ratio = Math.max(0, Math.min(1, (event.clientX - rectangle.left) / rectangle.width));
+            const targetStart = min + Math.round(ratio * Math.max(0, totalDays - 1)) * dayMs;
+            commit(track, ganttDatePatch(source, daysBetween(sourceStart, targetStart), "move"), source);
+          });
+        }
+        return el("article", {
+          class: `gantt-row gantt-row--${workTone(item)} ${row.critical && !isClosedWorkStatus(item.status) ? "is-critical" : ""}`
         }, [
-          el("div", {class: "gantt-task", style: `--level: ${Math.min(6, row.level)}`}, [
-            el("strong", {class: "gantt-task__title"}, item.title),
-            el("span", {}, workStatusLabel(item.status ?? configuredDefaultStatusId)),
-            el("span", {}, item.assigneeName ?? item.assigneeId ?? "Unassigned"),
-            el("span", {}, workDurationText(row.start, row.end)),
-            dependencyText ? el("small", {}, dependencyText) : ""
-          ]),
-          el("div", {class: "gantt-track"}, [
-            row.start === undefined || row.end === undefined
-              ? el("span", {class: "gantt-unscheduled"}, "Unscheduled")
-              : row.milestone
-                ? el("span", {class: "gantt-bar gantt-bar--milestone", style: `left: ${offset}%`, title: formatDate(new Date(row.start).toISOString())})
-                : el("span", {class: "gantt-bar", style: `left: ${offset}%; width: ${width}%`}, [
-                  el("span", {class: "gantt-bar__fill", style: `width: ${row.progress}%`}),
-                  el("span", {class: "gantt-bar__label"}, `${formatDate(new Date(row.start).toISOString())} - ${formatDate(new Date(row.end).toISOString())}`)
-                ])
-          ])
+          task,
+          track
         ]);
       })
     ])
@@ -2918,7 +3480,7 @@ export function workListWorkbench(items = [], client, {onSaved, view = "grid"} =
     board: workItemKanban(visible, client, {onSaved}),
     calendar: workCalendarView(visible),
     timeline: workTimelineView(visible),
-    gantt: workGanttView(visible)
+    gantt: workGanttView(visible, client, {onSaved})
   })[currentView];
   const render = () => {
     const visible = visibleItems();
@@ -3155,6 +3717,10 @@ function compactUnique(values = []) {
 
 function planningFieldValue(item, fieldName) {
   if (fieldName === "status") return item.status ?? configuredDefaultStatusId;
+  if (fieldName === "assignee") return item.assigneeId || "Unassigned";
+  if (fieldName === "team") return item.teamId || "No team";
+  if (fieldName === "version") return item.versionName || "No version";
+  if (fieldName === "subproject") return item.projectId || "No project";
   if (fieldName === "period") return item.periodName || "Unscheduled";
   if (fieldName === "milestone") return item.milestoneName || "Unplanned";
   if (fieldName === "workflowStep") return item.customFields?.workflowStep || "Unassigned";
@@ -3164,10 +3730,13 @@ function planningFieldValue(item, fieldName) {
   return "All work";
 }
 
-function planningFieldLabel(fieldName, value) {
+function planningFieldLabel(fieldName, value, items = [], memberships = [], capabilities = {}) {
   if (fieldName === "status") return workStatusLabel(value);
   if (fieldName === "type") return workTypeLabel(value);
   if (fieldName === "priority") return titleCase(value);
+  if (fieldName === "assignee") return value === "Unassigned" ? value : memberName(memberships, value);
+  if (fieldName === "team") return value === "No team" ? value : teamName(capabilities, value);
+  if (fieldName === "subproject") return items.find((item) => item.projectId === value)?.projectName ?? value;
   return value;
 }
 
@@ -3175,6 +3744,7 @@ function planningColumnValues(items, fieldName, summary) {
   if (fieldName === "status") return workStatusValues(items);
   if (fieldName === "priority") return priorityList;
   if (fieldName === "type") return workTypeValues(items);
+  if (fieldName === "subproject") return compactUnique(items.map((item) => item.projectId));
   const values = compactUnique(items.map((item) => planningFieldValue(item, fieldName)));
   if (fieldName === "period") {
     const currentPeriod = summary?.currentPeriod;
@@ -3224,6 +3794,9 @@ function filterPlanningWorkbenchItems(items, state, summary) {
 
 function planningPatchForColumn(item, fieldName, value) {
   if (fieldName === "status") return {status: value};
+  if (fieldName === "assignee") return {assigneeId: value === "Unassigned" ? "" : value};
+  if (fieldName === "team") return {teamId: value === "No team" ? "" : value};
+  if (fieldName === "version") return {versionName: value === "No version" ? "" : value};
   if (fieldName === "period") return {periodName: value === "Unscheduled" ? "" : value};
   if (fieldName === "milestone") return {milestoneName: value === "Unplanned" ? "" : value};
   if (fieldName === "workflowStep") {
@@ -3461,7 +4034,7 @@ function setSelectValue(select, value) {
 
 export const planningWorkbenchDefaultScope = "all";
 
-export function planningWorkbenchView(items = [], client, {onSaved, summary, savedViews = [], selectedProjectId = "", memberships = [], workConfiguration, canManageColumns = false} = {}) {
+export function planningWorkbenchView(items = [], client, {onSaved, summary, savedViews = [], selectedProjectId = "", memberships = [], workConfiguration, capabilities = {}, canManageColumns = false} = {}) {
   const root = el("section", {class: "planning-workbench", id: "task-views", "data-planning-workbench": "true"});
   const savedViewOptions = planningSavedViewOptions(savedViews, selectedProjectId);
   const quickViews = [
@@ -3481,6 +4054,10 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
   ], "board");
   const boardBy = selectInput("boardBy", [
     {value: "status", label: "Status"},
+    {value: "assignee", label: "Assignee"},
+    {value: "team", label: "Team"},
+    {value: "version", label: "Version"},
+    {value: "subproject", label: "Subproject"},
     {value: "period", label: "Time period"},
     {value: "milestone", label: "Milestone"},
     {value: "workflowStep", label: "Workflow step"},
@@ -3544,6 +4121,7 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
   const bulkEditor = workItemBulkEditor(client, items, {
     selectedIds,
     memberships,
+    capabilities,
     onSaved,
     onRender: () => render?.()
   });
@@ -3590,9 +4168,10 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
       status.className = "form-status planning-workbench__status";
       status.textContent = "";
       try {
-        await client.workItems.patch(item.projectId, item.id, {...planningPatchForColumn(item, state.boardBy, value), version: item.version});
+        if (state.boardBy === "subproject") await client.workItems.move(item.projectId, item.id, {targetProjectId: value, version: item.version});
+        else await client.workItems.patch(item.projectId, item.id, {...planningPatchForColumn(item, state.boardBy, value), version: item.version});
         status.className = "form-status planning-workbench__status ok";
-        status.textContent = `Moved ${item.title ?? "task"} to ${planningFieldLabel(state.boardBy, value)}.`;
+        status.textContent = `Moved ${item.title ?? "task"} to ${planningFieldLabel(state.boardBy, value, items, memberships, capabilities)}.`;
         onSaved?.();
       } catch (error) {
         status.className = "form-status planning-workbench__status error";
@@ -3606,7 +4185,7 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
         const isOverLimit = state.boardBy === "status" && value === "in-progress" && columnItems.length > Number(summary?.wipLimit ?? 4);
         const column = el("section", {class: `planning-workbench__column ${isOverLimit ? "is-over-limit" : ""}${acceptsMoves ? "" : " is-retired"}`}, [
           el("div", {class: "planning-workbench__header"}, [
-            el("h3", {}, planningFieldLabel(state.boardBy, value)),
+            el("h3", {}, planningFieldLabel(state.boardBy, value, items, memberships, capabilities)),
             el("span", {}, `${columnItems.length} ${columnItems.length === 1 ? "item" : "items"}`)
           ]),
           el("div", {class: "planning-workbench__meta"}, [
@@ -3622,7 +4201,7 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
             compact: true,
             moveTargets: columns
               .filter((candidate) => candidate !== value && (state.boardBy !== "status" || workStatusList.includes(candidate)))
-              .map((candidate) => ({value: candidate, label: planningFieldLabel(state.boardBy, candidate)})),
+              .map((candidate) => ({value: candidate, label: planningFieldLabel(state.boardBy, candidate, items, memberships, capabilities)})),
             onMove: (nextValue) => moveItem(item, nextValue)
           });
           card.addEventListener("dragstart", (event) => event.dataTransfer?.setData("text/plain", item.id));
@@ -3646,7 +4225,7 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
           ? state.scope === "open"
             ? "This Open tasks view hides completed cards. Choose All tasks in View options to keep them visible."
             : "Showing all tasks, including completed work."
-          : `Grouped by ${{period: "time period", milestone: "milestone", workflowStep: "workflow step", workstream: "workstream", priority: "priority", type: "task type"}[state.boardBy] ?? state.boardBy}.`),
+          : `Grouped by ${{assignee: "assignee", team: "team", version: "version", subproject: "subproject", period: "time period", milestone: "milestone", workflowStep: "workflow step", workstream: "workstream", priority: "priority", type: "task type"}[state.boardBy] ?? state.boardBy}.`),
         el("details", {class: "planning-workbench__effort-help"}, [
           el("summary", {}, "About effort points"),
           el("p", {}, state.boardBy === "status"
@@ -3664,7 +4243,8 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
               bulkEditor.node,
               workItemTable(viewItems, {
                 selectedIds,
-                onSelectionChange: (selection) => bulkEditor.sync(selection)
+                onSelectionChange: (selection) => bulkEditor.sync(selection),
+                capabilities
               })
             ])
           : state.layout === "timeline"
@@ -3672,7 +4252,7 @@ export function planningWorkbenchView(items = [], client, {onSaved, summary, sav
             : state.layout === "calendar"
               ? workCalendarView(viewItems)
               : state.layout === "gantt"
-                ? workGanttView(viewItems)
+                ? workGanttView(viewItems, client, {onSaved})
                 : state.layout === "workload"
                   ? workloadPlanningView(viewItems)
                   : state.layout === "dependencies"
@@ -3957,19 +4537,29 @@ export function planningWorkItemFormView(client, projects, {onSaved, selectedPro
   return form;
 }
 
-export function timeEntryForm(client, projects, {onSaved, selectedProjectId = ""} = {}) {
+function timeEntryActivityOptions(capabilities = {}) {
+  const activities = (capabilities.timeEntryActivities ?? []).filter((activity) => activity.active !== false);
+  return (activities.length ? activities : [{id: "general", name: "General"}]).map((activity) => ({value: activity.id, label: activity.name ?? activity.id}));
+}
+
+export function timeEntryForm(client, projects, {onSaved, selectedProjectId = "", capabilities = {}} = {}) {
+  const activityOptions = timeEntryActivityOptions(capabilities);
   const form = el("form", {class: "editor-form"}, [
     field("Project", selectInput("projectId", projects.map((item) => ({value: item.id, label: item.name})), selectedProjectId)),
     field("Date", el("input", {name: "entryDate", type: "date", value: new Date().toISOString().slice(0, 10)})),
     field("Minutes", el("input", {name: "durationMinutes", type: "number", min: "1", max: "1440", value: "30"})),
+    field("Activity", selectInput("activityId", activityOptions, activityOptions.some((item) => item.value === "general") ? "general" : activityOptions[0]?.value)),
     field("Description", textInput("description", "Work completed")),
     field("Billable", el("input", {name: "billable", type: "checkbox"})),
+    ...configuredCustomFieldEditors(capabilities, {}, "time-entry"),
     el("button", {class: "button button--primary", type: "submit"}, "Save time")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(form).entries());
-    data.billable = data.billable === "on";
+    const data = formValues(form);
+    data.durationMinutes = Number(data.durationMinutes);
+    data.billable = Boolean(data.billable);
+    data.customFields = configuredCustomFieldValues(data, capabilities, {}, "time-entry");
     try {
       await client.timeEntries.create(data, {idempotencyKey: crypto.randomUUID()});
       saveStatus(form, "Time saved.", "ok");
@@ -3981,23 +4571,84 @@ export function timeEntryForm(client, projects, {onSaved, selectedProjectId = ""
   return form;
 }
 
-export function timerControl() {
+export function timerControl(client, projects = [], timer = {active: false}, {onSaved, selectedProjectId = "", capabilities = {}} = {}) {
   const root = el("section", {class: "timer"});
   const readout = el("strong", {}, "00:00");
-  let startedAt = 0;
+  let startedAt = timer.active ? new Date(timer.startedAt).getTime() : 0;
   let interval;
-  const start = el("button", {class: "button", type: "button"}, "Start");
-  const stop = el("button", {class: "button", type: "button"}, "Stop");
-  start.addEventListener("click", () => {
-    startedAt = Date.now();
+  const project = selectInput("projectId", projects.map((item) => ({value: item.id, label: item.name})), timer.projectId ?? selectedProjectId);
+  const activityOptions = timeEntryActivityOptions(capabilities);
+  const activity = selectInput("activityId", activityOptions, timer.activityId ?? (activityOptions.some((item) => item.value === "general") ? "general" : activityOptions[0]?.value));
+  const description = textInput("description", "What are you working on?", timer.description ?? "");
+  const billable = el("input", {name: "billable", type: "checkbox"});
+  billable.checked = Boolean(timer.billable);
+  const start = el("button", {class: "button", type: "button", disabled: timer.active ? "true" : undefined}, "Start server timer");
+  const stop = el("button", {class: "button", type: "button", disabled: timer.active ? undefined : "true"}, "Stop and save");
+  const status = el("p", {class: "form-status", role: "status", "aria-live": "polite"});
+  const controls = el("form", {class: "editor-form"}, [
+    field("Project", project),
+    field("Activity", activity),
+    field("Description", description),
+    field("Billable", billable),
+    ...configuredCustomFieldEditors(capabilities, timer.customFields ?? {}, "time-entry"),
+    el("div", {class: "button-row"}, [start, stop]),
+    status
+  ]);
+  controls.addEventListener("submit", (event) => event.preventDefault());
+  const tick = () => {
+    const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    readout.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  };
+  const startClock = () => {
     clearInterval(interval);
-    interval = setInterval(() => {
-      const seconds = Math.floor((Date.now() - startedAt) / 1000);
-      readout.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-    }, 1000);
+    tick();
+    interval = setInterval(tick, 1000);
+  };
+  if (timer.active) startClock();
+  start.addEventListener("click", async () => {
+    if (!client || !project.value) return;
+    start.disabled = true;
+    try {
+      const data = formValues(controls);
+      const active = await client.timer.start({
+        projectId: project.value,
+        activityId: activity.value,
+        description: description.value,
+        billable: billable.checked,
+        customFields: configuredCustomFieldValues(data, capabilities, timer.customFields ?? {}, "time-entry")
+      });
+      startedAt = new Date(active.startedAt).getTime();
+      stop.disabled = false;
+      startClock();
+      status.className = "form-status ok";
+      status.textContent = "Timer is running across devices.";
+    } catch (error) {
+      start.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
   });
-  stop.addEventListener("click", () => clearInterval(interval));
-  root.append(el("h2", {}, "Timer"), readout, start, stop);
+  stop.addEventListener("click", async () => {
+    if (!client) return;
+    stop.disabled = true;
+    try {
+      const result = await client.timer.stop();
+      clearInterval(interval);
+      readout.textContent = "00:00";
+      status.className = "form-status ok";
+      status.textContent = `Saved ${result.entry.durationMinutes} minute${result.entry.durationMinutes === 1 ? "" : "s"}.`;
+      onSaved?.();
+    } catch (error) {
+      stop.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
+  });
+  root.append(
+    el("h2", {}, "Persistent timer"),
+    readout,
+    controls
+  );
   return root;
 }
 
@@ -4006,14 +4657,98 @@ export function timeSummary(entries) {
   return dataTable(["Signal", "Value"], [["Entries", entries.length], ["Recorded", `${Math.round(total / 60 * 10) / 10}h`]]);
 }
 
-export function timesheetTable(entries, projects) {
+export function timesheetTable(entries, projects, client, {onSaved, capabilities = {}} = {}) {
   const names = new Map(projects.map((project) => [project.id, project.name]));
-  return dataTable(["Date", "Project", "Minutes", "Billable", "Description"], entries.map((entry) => [
+  const activities = new Map(timeEntryActivityOptions(capabilities).map((activity) => [activity.value, activity.label]));
+  return dataTable(["Date", "Project", "Activity", "Minutes", "Billable", "Description", "Actions"], entries.map((entry) => [
     entry.entryDate,
     entry.projectId ? el("a", {href: projectHref(entry.projectId)}, names.get(entry.projectId) ?? entry.projectId ?? "") : "",
+    activities.get(entry.activityId ?? "general") ?? entry.activityId ?? "General",
     entry.durationMinutes,
     entry.billable ? "Yes" : "No",
-    entry.description ?? ""
+    entry.description ?? "",
+    client ? timeEntryActions(client, entry, {onSaved, capabilities}) : ""
+  ]));
+}
+
+function timeEntryActions(client, entry, {onSaved, capabilities = {}} = {}) {
+  const date = el("input", {type: "date", value: entry.entryDate});
+  const minutes = el("input", {type: "number", min: "1", max: "1440", value: entry.durationMinutes});
+  const activity = selectInput("activityId", timeEntryActivityOptions(capabilities), entry.activityId ?? "general");
+  const description = textInput("description", "Work completed", entry.description ?? "");
+  const billable = el("input", {type: "checkbox"});
+  billable.checked = Boolean(entry.billable);
+  const save = el("button", {class: "button", type: "button"}, "Save");
+  const remove = el("button", {class: "button", type: "button"}, "Delete");
+  const status = el("span", {class: "form-status", role: "status"});
+  const editor = el("form", {class: "editor-form"}, [
+    field("Date", date),
+    field("Minutes", minutes),
+    field("Activity", activity),
+    field("Description", description),
+    field("Billable", billable),
+    ...configuredCustomFieldEditors(capabilities, entry.customFields ?? {}, "time-entry"),
+    el("div", {class: "button-row"}, [save, remove]),
+    status
+  ]);
+  editor.addEventListener("submit", (event) => event.preventDefault());
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const values = formValues(editor);
+      await client.timeEntries.patch(entry.id, {
+        version: entry.version,
+        originalEntryDate: entry.entryDate,
+        entryDate: date.value,
+        durationMinutes: Number(minutes.value),
+        activityId: activity.value,
+        description: description.value,
+        billable: billable.checked,
+        customFields: configuredCustomFieldValues(values, capabilities, entry.customFields ?? {}, "time-entry")
+      });
+      status.className = "form-status ok";
+      status.textContent = "Saved";
+      onSaved?.();
+    } catch (error) {
+      save.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
+  });
+  remove.addEventListener("click", async () => {
+    remove.disabled = true;
+    try {
+      await client.timeEntries.delete(entry.id, {version: entry.version, originalEntryDate: entry.entryDate});
+      onSaved?.();
+    } catch (error) {
+      remove.disabled = false;
+      status.className = "form-status error";
+      status.textContent = error.message;
+    }
+  });
+  return el("details", {class: "inline-editor"}, [
+    el("summary", {}, "Edit"),
+    editor
+  ]);
+}
+
+export function weeklyTimesheet(entries = []) {
+  const byWeek = new Map();
+  for (const entry of entries) {
+    const date = new Date(`${entry.entryDate}T00:00:00Z`);
+    const monday = new Date(date);
+    monday.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+    const week = monday.toISOString().slice(0, 10);
+    const day = (date.getUTCDay() + 6) % 7;
+    const row = byWeek.get(week) ?? {week, days: Array(7).fill(0), total: 0};
+    row.days[day] += Number(entry.durationMinutes ?? 0);
+    row.total += Number(entry.durationMinutes ?? 0);
+    byWeek.set(week, row);
+  }
+  return dataTable(["Week of", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Total"], [...byWeek.values()].sort((a, b) => b.week.localeCompare(a.week)).map((row) => [
+    row.week,
+    ...row.days.map(formatHours),
+    formatHours(row.total)
   ]));
 }
 
@@ -4060,6 +4795,7 @@ export function meetingMutationPayload(values = {}, agendaItems = [], {allowedWo
     }
     return {
       id,
+      section: String(item.section ?? "General").trim() || "General",
       title: agendaTitle,
       durationMinutes,
       presenterId: String(item.presenterId ?? "").trim(),
@@ -4090,7 +4826,18 @@ export function meetingMutationPayload(values = {}, agendaItems = [], {allowedWo
     location: String(values.location ?? "").trim(),
     participantIds,
     agendaItems: normalizedAgenda,
-    minutes: String(values.minutes ?? "").trim()
+    minutes: String(values.minutes ?? "").trim(),
+    recurrence: values.recurrenceFrequency && values.recurrenceFrequency !== "none" ? {
+      frequency: values.recurrenceFrequency,
+      interval: Number(values.recurrenceInterval ?? 1),
+      weekdays: meetingStringValues(values.recurrenceWeekdays).flatMap((value) => value.split(",")).map((value) => Number(value.trim())).filter((value) => Number.isInteger(value)),
+      until: String(values.recurrenceUntil ?? ""),
+      occurrences: Number(values.recurrenceOccurrences ?? 0)
+    } : undefined,
+    template: Boolean(values.template),
+    attachmentIds: meetingStringValues(values.attachmentIds),
+    attendance: Array.isArray(values.attendance) ? values.attendance : participantIds.map((userId) => ({userId, status: "invited", note: ""})),
+    invitationMessage: String(values.invitationMessage ?? "").trim()
   };
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > maxMeetingPayloadBytes) {
     throw new Error("Meeting content must be at most 32 KiB.");
@@ -4107,7 +4854,12 @@ const meetingPatchFields = [
   "location",
   "participantIds",
   "agendaItems",
-  "minutes"
+  "minutes",
+  "recurrence",
+  "template",
+  "attachmentIds",
+  "attendance",
+  "invitationMessage"
 ];
 
 function comparableMeetingField(field, value) {
@@ -4115,6 +4867,8 @@ function comparableMeetingField(field, value) {
   if (field === "agendaItems") {
     return (value ?? []).map((item) => ({
       id: item.id ?? "",
+      section: item.section ?? "General",
+      section: item.section ?? "General",
       title: item.title ?? "",
       durationMinutes: Number(item.durationMinutes ?? 0),
       presenterId: item.presenterId ?? "",
@@ -4123,6 +4877,7 @@ function comparableMeetingField(field, value) {
       outcome: item.outcome ?? ""
     }));
   }
+  if (["attachmentIds"].includes(field)) return [...(value ?? [])].map(String).sort();
   return value ?? "";
 }
 
@@ -4166,6 +4921,8 @@ function meetingAgendaRow(item = {}, memberships = [], workItems = [], {allowOut
   const title = textInput("agendaTitle", "Decision, topic, or review", item.title ?? "");
   title.required = true;
   title.setAttribute("data-agenda-field", "title");
+  const section = textInput("agendaSection", "General, Decisions, Backlog", item.section ?? "General");
+  section.setAttribute("data-agenda-field", "section");
   const duration = el("input", {name: "agendaDuration", type: "number", min: "0", max: "1440", step: "1", value: String(item.durationMinutes ?? 15), "data-agenda-field": "durationMinutes"});
   const presenter = selectInput("agendaPresenter", memberOptions(memberships, "No presenter"), item.presenterId ?? "");
   presenter.setAttribute("data-agenda-field", "presenterId");
@@ -4189,6 +4946,7 @@ function meetingAgendaRow(item = {}, memberships = [], workItems = [], {allowOut
   row.dataset.agendaId = agendaId;
   row.append(
     el("legend", {}, item.title ? `Agenda: ${item.title}` : "Agenda item"),
+    field("Section", section),
     field("Title", title),
     field("Duration (minutes)", duration),
     field("Presenter", presenter),
@@ -4204,6 +4962,7 @@ function meetingAgendaRow(item = {}, memberships = [], workItems = [], {allowOut
 function meetingAgendaValues(form) {
   return [...form.querySelectorAll(".meeting-agenda-row")].map((row) => ({
     id: row.dataset.agendaId ?? "",
+    section: row.querySelector('[data-agenda-field="section"]')?.value ?? "General",
     title: row.querySelector('[data-agenda-field="title"]')?.value ?? "",
     durationMinutes: row.querySelector('[data-agenda-field="durationMinutes"]')?.value ?? "0",
     presenterId: row.querySelector('[data-agenda-field="presenterId"]')?.value ?? "",
@@ -4213,7 +4972,7 @@ function meetingAgendaValues(form) {
   }));
 }
 
-export function meetingForm(client, project, {meeting, memberships = [], workItems = [], currentUserId = "", onSaved} = {}) {
+export function meetingForm(client, project, {meeting, memberships = [], workItems = [], documents = [], currentUserId = "", onSaved} = {}) {
   const editing = Boolean(meeting);
   const inProgress = meeting?.status === "in-progress";
   const eligibleMemberships = memberships.filter((membership) => (
@@ -4261,6 +5020,9 @@ export function meetingForm(client, project, {meeting, memberships = [], workIte
   minutes.disabled = !inProgress;
   const agendaHeadingId = `meeting-agenda-${meeting?.id ?? crypto.randomUUID()}`;
   const operationIdempotencyKey = editing ? undefined : crypto.randomUUID();
+  const templateInput = el("input", {name: "template", type: "checkbox"});
+  templateInput.checked = Boolean(meeting?.template);
+  const attachmentInput = multiSelectInput("attachmentIds", documents.map((document) => ({value: document.id, label: document.name ?? document.filename ?? document.id})), meeting?.attachmentIds ?? []);
   const statusControl = editing
     ? field("Status", selectInput("status", [meeting.status, ...(meetingStatusTransitions[meeting.status] ?? [])], meeting.status))
     : el("div", {class: "meeting-editor__fixed-status"}, [
@@ -4277,6 +5039,14 @@ export function meetingForm(client, project, {meeting, memberships = [], workIte
     field("Ends", el("input", {name: "endsAt", type: "datetime-local", step: "0.001", required: "true", value: meetingInputDateTime(meeting?.endsAt, 90)})),
     field("Location or call link", textInput("location", "Room 4 or https://...", meeting?.location ?? "")),
     field("Participants", participantInput),
+    field("Invitation message", textareaInput("invitationMessage", "Optional context sent with the invitation", meeting?.invitationMessage ?? "")),
+    field("Recurrence", selectInput("recurrenceFrequency", ["none", "daily", "weekly", "monthly"], meeting?.recurrence?.frequency ?? "none")),
+    field("Repeat every", el("input", {name: "recurrenceInterval", type: "number", min: "1", max: "52", value: String(meeting?.recurrence?.interval ?? 1)})),
+    field("Recurrence weekdays", textInput("recurrenceWeekdays", "1,3,5", (meeting?.recurrence?.weekdays ?? []).join(","))),
+    field("Recurrence until", el("input", {name: "recurrenceUntil", type: "date", value: meeting?.recurrence?.until ?? ""})),
+    field("Maximum occurrences", el("input", {name: "recurrenceOccurrences", type: "number", min: "0", max: "500", value: String(meeting?.recurrence?.occurrences ?? 0)})),
+    field("Reusable meeting template", templateInput),
+    field("Attachments", attachmentInput),
     field("Description", textareaInput("description", "Purpose and expected decisions", meeting?.description ?? "")),
     el("section", {class: "meeting-editor__agenda", "aria-labelledby": agendaHeadingId}, [
       el("div", {class: "section-heading"}, [
@@ -4303,7 +5073,10 @@ export function meetingForm(client, project, {meeting, memberships = [], workIte
         ...data,
         projectId: project.id,
         participantIds: selectedParticipants,
-        minutes: minutes.value
+        minutes: minutes.value,
+        template: templateInput.checked,
+        attachmentIds: [...(attachmentInput.querySelector("select")?.selectedOptions ?? [])].map((option) => option.value),
+        attendance: selectedParticipants.map((userId) => meeting?.attendance?.find((item) => item.userId === userId) ?? {userId, status: "invited", note: ""})
       }, meetingAgendaValues(form), {
         allowedWorkItemIds: [
           ...workItems.map((item) => item.id),
@@ -4388,12 +5161,24 @@ export function meetingsWorkspace(meetings = [], project, {memberships = [], cur
   ]);
 }
 
+export function globalMeetingsTable(meetings = [], projects = []) {
+  const projectById = new Map(projects.map((project) => [project.id, project.name]));
+  if (!meetings.length) return emptyView("No upcoming meetings are visible in this workspace.");
+  return dataTable(["Meeting", "Project", "Starts", "Status", "Series"], meetings.map((meeting) => [
+    el("a", {href: `/app/meetings?projectId=${encodeURIComponent(meeting.projectId)}&meetingId=${encodeURIComponent(meeting.id)}`}, meeting.title),
+    projectById.get(meeting.projectId) ?? meeting.projectId,
+    meetingDisplayDateTime(meeting.startsAt),
+    badge(meeting.status, meetingTone(meeting.status)),
+    meeting.recurrence ? titleCase(meeting.recurrence.frequency) : meeting.template ? "Template" : "One time"
+  ]));
+}
+
 function meetingAgendaView(items = [], memberships = [], workItems = [], projectId = "") {
   const workById = workItemLookup(workItems);
   if (!items.length) return emptyView("No agenda items have been added.");
   return el("ol", {class: "meeting-agenda"}, items.map((item) => el("li", {}, [
     el("div", {class: "meeting-agenda__heading"}, [
-      el("strong", {}, item.title),
+      el("strong", {}, `${item.section ?? "General"} · ${item.title}`),
       item.durationMinutes ? el("span", {}, `${item.durationMinutes} min`) : ""
     ]),
     item.presenterId ? el("small", {}, `Presenter: ${memberName(memberships, item.presenterId)}`) : "",
@@ -4431,7 +5216,17 @@ function meetingLifecycleView(status = "draft") {
   }, step.label)));
 }
 
-export function meetingDetailView(meeting, client, {memberships = [], workItems = [], canManage = false, onSaved} = {}) {
+function downloadMeetingExport(result) {
+  const bytes = result.base64
+    ? Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0))
+    : result.content;
+  const url = URL.createObjectURL(new Blob([bytes], {type: result.contentType}));
+  const link = el("a", {href: url, download: result.filename});
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function meetingDetailView(meeting, client, {memberships = [], workItems = [], documents = [], currentUserId = "", canManage = false, onSaved} = {}) {
   const locked = meeting.status === "closed" || meeting.status === "cancelled";
   const reopen = el("button", {class: "button", type: "button"}, "Reopen meeting");
   reopen.addEventListener("click", async () => {
@@ -4444,13 +5239,58 @@ export function meetingDetailView(meeting, client, {memberships = [], workItems 
       reopen.insertAdjacentElement("afterend", el("span", {class: "form-status error", role: "alert"}, error.message));
     }
   });
+  const calendar = el("button", {class: "button", type: "button"}, "iCalendar");
+  calendar.addEventListener("click", async () => downloadMeetingExport(await client.meetings.calendar(meeting.projectId, meeting.id)));
+  const pdf = el("button", {class: "button", type: "button"}, "PDF");
+  pdf.addEventListener("click", async () => downloadMeetingExport(await client.meetings.pdf(meeting.projectId, meeting.id)));
+  const copy = el("button", {class: "button", type: "button"}, "Copy");
+  copy.addEventListener("click", async () => {
+    copy.disabled = true;
+    try {
+      await client.meetings.copy(meeting.projectId, meeting.id, {title: `${meeting.title} copy`});
+      onSaved?.();
+    } catch (error) {
+      copy.disabled = false;
+      copy.insertAdjacentElement("afterend", el("span", {class: "form-status error", role: "alert"}, error.message));
+    }
+  });
+  const remove = el("button", {class: "button button--ghost", type: "button"}, "Delete");
+  remove.addEventListener("click", async () => {
+    if (!confirm(`Delete “${meeting.title}”?`)) return;
+    remove.disabled = true;
+    try {
+      await client.meetings.delete(meeting.projectId, meeting.id, {version: meeting.version});
+      onSaved?.();
+    } catch (error) {
+      remove.disabled = false;
+      remove.insertAdjacentElement("afterend", el("span", {class: "form-status error", role: "alert"}, error.message));
+    }
+  });
+  const attendance = meeting.participantIds?.includes(currentUserId) ? (() => {
+    const current = meeting.attendance?.find((item) => item.userId === currentUserId);
+    const status = selectInput("attendanceStatus", ["accepted", "tentative", "declined", "attended", "absent"], current?.status === "invited" ? "accepted" : current?.status ?? "accepted");
+    const respond = el("button", {class: "button", type: "submit"}, "Save response");
+    const form = el("form", {class: "editor-form"}, [field("Your attendance", status), respond]);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      respond.disabled = true;
+      try {
+        await client.meetings.attendance(meeting.projectId, meeting.id, {version: meeting.version, status: status.value});
+        onSaved?.();
+      } catch (error) {
+        respond.disabled = false;
+        saveStatus(form, error.message, "error");
+      }
+    });
+    return form;
+  })() : "";
   return el("article", {class: "meeting-detail", id: "meeting-detail"}, [
     el("div", {class: "section-heading"}, [
       el("div", {}, [
         el("p", {class: "eyebrow"}, "Meeting record"),
         el("h2", {}, meeting.title)
       ]),
-      el("div", {class: "badge-row"}, [badge(meeting.status ?? "draft", meetingTone(meeting.status)), locked && canManage ? reopen : ""])
+      el("div", {class: "badge-row"}, [badge(meeting.status ?? "draft", meetingTone(meeting.status)), meeting.template ? badge("Template", "info") : "", locked && canManage ? reopen : ""])
     ]),
     meeting.description ? el("p", {class: "meeting-detail__description"}, meeting.description) : "",
     meetingLifecycleView(meeting.status),
@@ -4458,8 +5298,13 @@ export function meetingDetailView(meeting, client, {memberships = [], workItems 
       el("div", {}, [el("dt", {}, "Starts"), el("dd", {}, meetingDisplayDateTime(meeting.startsAt))]),
       el("div", {}, [el("dt", {}, "Ends"), el("dd", {}, meetingDisplayDateTime(meeting.endsAt))]),
       el("div", {}, [el("dt", {}, "Location"), el("dd", {}, meeting.location || "Not set")]),
-      el("div", {}, [el("dt", {}, "Participants"), el("dd", {}, meetingParticipantNames(meeting.participantIds ?? [], memberships))])
+      el("div", {}, [el("dt", {}, "Participants"), el("dd", {}, meetingParticipantNames(meeting.participantIds ?? [], memberships))]),
+      el("div", {}, [el("dt", {}, "Recurrence"), el("dd", {}, meeting.recurrence ? `${titleCase(meeting.recurrence.frequency)} every ${meeting.recurrence.interval}` : "One time")]),
+      el("div", {}, [el("dt", {}, "Attachments"), el("dd", {}, (meeting.attachmentIds ?? []).map((id) => documents.find((document) => document.id === id)?.name ?? id).join(", ") || "None")])
     ]),
+    el("div", {class: "button-row"}, [calendar, pdf, canManage ? copy : "", canManage ? remove : ""]),
+    attendance,
+    meeting.attendance?.length ? el("section", {class: "meeting-detail__section"}, [el("h3", {}, "Attendance and invitations"), dataTable(["Participant", "Response", "Note"], meeting.attendance.map((item) => [memberName(memberships, item.userId), badge(item.status, item.status === "accepted" || item.status === "attended" ? "good" : "neutral"), item.note || "—"]))]) : "",
     el("section", {class: "meeting-detail__section"}, [el("h3", {}, "Agenda and outcomes"), meetingAgendaView(meeting.agendaItems ?? [], memberships, workItems, meeting.projectId)]),
     el("section", {class: "meeting-detail__section"}, [
       el("h3", {}, "Minutes"),
@@ -4473,15 +5318,629 @@ export function meetingDetailView(meeting, client, {memberships = [], workItems 
 
 export function meetingDeferredNotice() {
   return el("div", {class: "meeting-deferred"}, [
-    el("p", {}, "Additional meeting capabilities are planned:"),
+    el("p", {}, "Meeting records support:"),
     el("ul", {}, [
       "recurring series and templates",
       "agenda sections and backlog workflows",
       "attendance responses and participant invitations",
-      "email, calendar, and iCalendar delivery",
+      "calendar and iCalendar delivery",
       "presentation mode and PDF export",
       "attachments, copy, and delete actions"
     ].map((item) => el("li", {}, item)))
+  ]);
+}
+
+const projectContentKindOptions = [
+  {value: "wiki-page", label: "Wiki page"},
+  {value: "document", label: "Collaborative document"},
+  {value: "news", label: "News post"},
+  {value: "forum-topic", label: "Forum topic"}
+];
+
+const projectContentStatusOptions = ["draft", "published", "locked", "archived"];
+
+export function projectContentFilter(projects = [], values = {}) {
+  return el("form", {class: "filter-form", method: "get", action: "/app/content"}, [
+    field("Project", selectInput("projectId", projectOptions(projects), values.projectId ?? "")),
+    field("Content type", selectInput("kind", [{value: "", label: "All content"}, ...projectContentKindOptions], values.kind ?? "")),
+    field("Status", selectInput("status", ["", ...projectContentStatusOptions], values.status ?? "")),
+    field("Search", textInput("search", "Title, body, or tag", values.search ?? "")),
+    el("button", {class: "button button--primary", type: "submit"}, "Apply")
+  ]);
+}
+
+export function projectContentForm(client, project, {content, availableContent = [], onSaved} = {}) {
+  const editing = Boolean(content);
+  const pinned = el("input", {name: "pinned", type: "checkbox"});
+  pinned.checked = Boolean(content?.pinned);
+  const parentOptions = [
+    {value: "", label: "No parent"},
+    ...availableContent.filter((item) => item.id !== content?.id).map((item) => ({value: item.id, label: item.title}))
+  ];
+  const submit = el("button", {class: "button button--primary", type: "submit"}, editing ? "Save revision" : "Create content");
+  const form = el("form", {class: "editor-form editor-form--wide"}, [
+    field("Type", selectInput("kind", projectContentKindOptions, content?.kind ?? "wiki-page")),
+    field("Title", el("input", {name: "title", required: "true", maxlength: "240", value: content?.title ?? "", placeholder: "Project handbook"})),
+    field("Parent page", selectInput("parentId", parentOptions, content?.parentId ?? "")),
+    field("Status", selectInput("status", projectContentStatusOptions, content?.status ?? "draft")),
+    field("Body", textareaInput("body", "Markdown content, decisions, or discussion prompt", content?.body ?? "")),
+    field("Tags", textInput("tags", "handbook, release, decision", (content?.tags ?? []).join(", "))),
+    field("Pin to top", pinned),
+    submit
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    const values = formValues(form);
+    const payload = {
+      projectId: project.id,
+      kind: values.kind,
+      title: values.title,
+      parentId: values.parentId,
+      status: values.status,
+      body: values.body,
+      format: "markdown",
+      tags: String(values.tags ?? "").split(",").map((tag) => tag.trim()).filter(Boolean),
+      pinned: Boolean(values.pinned)
+    };
+    try {
+      const saved = editing
+        ? await client.projectContent.patch(project.id, content.id, {version: content.version, ...payload})
+        : await client.projectContent.create(payload);
+      saveStatus(form, editing ? "Revision saved." : "Content created.", "ok");
+      onSaved?.(saved);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return form;
+}
+
+export function projectContentList(items = [], projectId = "") {
+  if (!items.length) return emptyView("No matching project content.");
+  const byParent = new Map();
+  for (const item of items) {
+    const siblings = byParent.get(item.parentId ?? "") ?? [];
+    siblings.push(item);
+    byParent.set(item.parentId ?? "", siblings);
+  }
+  const renderItem = (item, visited = new Set()) => {
+    const nextVisited = new Set(visited).add(item.id);
+    const children = (byParent.get(item.id) ?? []).filter((child) => !nextVisited.has(child.id));
+    return el("li", {}, [
+      el("article", {class: "content-card"}, [
+        el("div", {class: "section-heading"}, [
+          el("a", {href: `/app/content?projectId=${encodeURIComponent(projectId)}&contentId=${encodeURIComponent(item.id)}`}, item.title),
+          el("div", {class: "badge-row"}, [badge(item.kind, "neutral"), badge(item.status, item.status === "published" ? "good" : item.status === "locked" ? "watch" : "neutral"), item.pinned ? badge("Pinned", "info") : ""])
+        ]),
+        item.body ? el("p", {}, item.body.slice(0, 240)) : "",
+        el("small", {}, `Revision ${item.version} · updated ${formatDate(item.updatedAt)}`)
+      ]),
+      children.length ? el("ul", {class: "content-tree"}, children.map((child) => renderItem(child, nextVisited))) : ""
+    ]);
+  };
+  const roots = items.filter((item) => !item.parentId || !items.some((candidate) => candidate.id === item.parentId));
+  return el("ul", {class: "content-tree"}, roots.map((item) => renderItem(item)));
+}
+
+function expandContentMacros(body, {project, content} = {}) {
+  const macros = {
+    "project.name": project?.name ?? "Project",
+    "project.id": project?.id ?? content?.projectId ?? "",
+    "content.title": content?.title ?? "",
+    today: new Date().toISOString().slice(0, 10)
+  };
+  return String(body ?? "").replace(/\{\{\s*([a-z][a-z0-9.-]*)\s*\}\}/gi, (match, name) => (
+    name === "toc" ? match : Object.hasOwn(macros, name) ? macros[name] : match
+  ));
+}
+
+function inlineMarkdown(text, projectId) {
+  const fragment = document.createDocumentFragment();
+  const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https:\/\/[^\s)]+|\/[^\s)]*)\)|\[work-item:([^\]]+)\])/g;
+  let cursor = 0;
+  for (const match of String(text).matchAll(pattern)) {
+    fragment.append(String(text).slice(cursor, match.index));
+    if (match[2]) fragment.append(el("strong", {}, match[2]));
+    else if (match[3]) fragment.append(el("code", {}, match[3]));
+    else if (match[4]) fragment.append(el("a", {href: match[5], rel: match[5].startsWith("https://") ? "noopener noreferrer" : undefined, target: match[5].startsWith("https://") ? "_blank" : undefined}, match[4]));
+    else if (match[6]) fragment.append(el("a", {href: projectId ? `/app/project?id=${encodeURIComponent(projectId)}#${encodeURIComponent(match[6])}` : "#"}, `Work item ${match[6]}`));
+    cursor = Number(match.index) + match[0].length;
+  }
+  fragment.append(String(text).slice(cursor));
+  return fragment;
+}
+
+export function projectContentBody(body, context = {}) {
+  const source = expandContentMacros(body, context);
+  const lines = source.split("\n");
+  const headings = lines.map((line, index) => {
+    const match = line.match(/^(#{1,3})\s+(.+)$/);
+    return match ? {level: match[1].length, label: match[2], id: `content-heading-${index}`} : undefined;
+  }).filter(Boolean);
+  const container = el("div", {class: "content-body content-body--rendered"});
+  let list;
+  let code;
+  const finishList = () => { list = undefined; };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim().startsWith("```")) {
+      finishList();
+      if (code) {
+        container.append(el("pre", {}, el("code", {}, code.join("\n"))));
+        code = undefined;
+      } else code = [];
+      continue;
+    }
+    if (code) {
+      code.push(line);
+      continue;
+    }
+    if (/^\{\{\s*toc\s*\}\}$/i.test(line.trim())) {
+      finishList();
+      container.append(el("nav", {class: "content-toc", "aria-label": "On this page"}, [el("strong", {}, "On this page"), el("ul", {}, headings.map((heading) => el("li", {class: `content-toc__level-${heading.level}`}, el("a", {href: `#${heading.id}`}, heading.label))))]));
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      finishList();
+      const item = headings.find((candidate) => candidate.id === `content-heading-${index}`);
+      container.append(el(`h${heading[1].length}`, {id: item?.id}, inlineMarkdown(heading[2], context.project?.id ?? context.content?.projectId)));
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!list) {
+        list = el("ul", {});
+        container.append(list);
+      }
+      list.append(el("li", {}, inlineMarkdown(bullet[1], context.project?.id ?? context.content?.projectId)));
+      continue;
+    }
+    finishList();
+    if (line.startsWith("> ")) container.append(el("blockquote", {}, inlineMarkdown(line.slice(2), context.project?.id ?? context.content?.projectId)));
+    else if (line.trim()) container.append(el("p", {}, inlineMarkdown(line, context.project?.id ?? context.content?.projectId)));
+  }
+  if (code) container.append(el("pre", {}, el("code", {}, code.join("\n"))));
+  if (!container.childNodes.length) container.append(el("p", {}, "No content yet."));
+  return container;
+}
+
+export function contentEditOperations(previous, next) {
+  previous = String(previous ?? "");
+  next = String(next ?? "");
+  if (previous === next) return [];
+  let prefix = 0;
+  while (prefix < previous.length && prefix < next.length && previous[prefix] === next[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < previous.length - prefix && suffix < next.length - prefix && previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]) suffix += 1;
+  const operations = [];
+  const deleteCount = previous.length - prefix - suffix;
+  const insertText = next.slice(prefix, next.length - suffix);
+  if (deleteCount) operations.push({type: "delete", index: prefix, count: deleteCount});
+  if (insertText) operations.push({type: "insert", index: prefix, text: insertText});
+  return operations;
+}
+
+export function collaborativeContentEditor(client, project, content, presence = [], {onSaved} = {}) {
+  const clientId = globalThis.crypto?.randomUUID?.() ?? `editor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let baseBody = String(content.body ?? "");
+  let baseVersion = Number(content.version);
+  let dirty = false;
+  let saving = false;
+  let autoSaveTimer;
+  let syncTimer;
+  const editor = textareaInput("body", "Write Markdown, {{project.name}}, {{toc}}, or [work-item:ID]", baseBody);
+  editor.rows = 14;
+  const preview = el("div", {class: "content-editor__preview"}, projectContentBody(editor.value, {project, content}));
+  const collaborators = el("div", {class: "content-presence", "aria-live": "polite"});
+  const renderPresence = (items = []) => collaborators.replaceChildren(
+    badge(`${items.length || 1} active editor${(items.length || 1) === 1 ? "" : "s"}`, "info"),
+    el("span", {}, items.map((item) => item.userName).filter(Boolean).join(", ") || "You")
+  );
+  renderPresence(presence);
+  const syncStatus = el("p", {class: "form-status", role: "status", "aria-live": "polite"}, `Synced revision ${baseVersion}`);
+  const setSyncStatus = (message, tone = "") => {
+    syncStatus.className = `form-status${tone ? ` ${tone}` : ""}`;
+    syncStatus.textContent = message;
+  };
+  const submit = el("button", {class: "button button--primary", type: "submit"}, "Save now");
+  const form = el("form", {class: "editor-form editor-form--wide content-editor"}, [
+    el("div", {class: "content-editor__toolbar", role: "toolbar", "aria-label": "Formatting"}),
+    field("Markdown content", editor),
+    collaborators,
+    el("details", {class: "content-editor__help"}, [el("summary", {}, "Macros and links"), el("p", {}, "Use {{project.name}}, {{project.id}}, {{content.title}}, {{today}}, {{toc}}, and [work-item:ID]. Markdown links must use HTTPS or an application-relative path.")]),
+    el("section", {}, [el("h3", {}, "Live preview"), preview]),
+    syncStatus,
+    submit
+  ]);
+  const toolbar = form.querySelector(".content-editor__toolbar");
+  const applyMarkup = (before, after = before, fallback = "text") => {
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const selected = editor.value.slice(start, end) || fallback;
+    editor.setRangeText(`${before}${selected}${after}`, start, end, "end");
+    editor.dispatchEvent(new Event("input", {bubbles: true}));
+    editor.focus();
+  };
+  for (const action of [
+    {label: "Heading", run: () => applyMarkup("## ", "", "Heading")},
+    {label: "Bold", run: () => applyMarkup("**", "**")},
+    {label: "Code", run: () => applyMarkup("`", "`")},
+    {label: "Link", run: () => applyMarkup("[", "](https://example.com)", "link text")},
+    {label: "Work item", run: () => applyMarkup("[work-item:", "]", "ID")},
+    {label: "Contents", run: () => applyMarkup("", "", "{{toc}}")}
+  ]) {
+    const button = el("button", {class: "button", type: "button"}, action.label);
+    button.addEventListener("click", action.run);
+    toolbar.append(button);
+  }
+  let presenceTimer;
+  const reportPresence = () => {
+    clearTimeout(presenceTimer);
+    presenceTimer = setTimeout(() => client.projectContent.updatePresence(project.id, content.id, {clientId, cursor: editor.selectionStart, selectionEnd: editor.selectionEnd}).catch(() => undefined), 250);
+    presenceTimer.unref?.();
+  };
+  const saveRevision = async ({notify = false} = {}) => {
+    if (saving) return;
+    const draft = editor.value;
+    const operations = contentEditOperations(baseBody, draft);
+    if (!operations.length) {
+      dirty = false;
+      setSyncStatus(`Synced revision ${baseVersion}`, "ok");
+      return;
+    }
+    saving = true;
+    submit.disabled = true;
+    editor.readOnly = true;
+    const changeId = globalThis.crypto?.randomUUID?.() ?? `${clientId}-${Date.now()}`;
+    try {
+      let saved;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          saved = await client.projectContent.operations(project.id, content.id, {version: baseVersion, clientId, changeId, operations});
+          break;
+        } catch (error) {
+          if (error.status !== 409 || attempt) throw error;
+        }
+      }
+      baseBody = String(saved.body ?? "");
+      baseVersion = Number(saved.version);
+      editor.value = baseBody;
+      dirty = false;
+      preview.replaceChildren(projectContentBody(editor.value, {project, content: {...content, body: baseBody, version: baseVersion}}));
+      setSyncStatus(`${saved.collaboration?.merged ? "Merged concurrent edits and synced" : "Synced"} revision ${baseVersion}.`, "ok");
+      if (notify) onSaved?.(saved);
+    } catch (error) {
+      dirty = true;
+      setSyncStatus(error.status === 409 ? "The collaboration window advanced repeatedly. Your draft is preserved; try Save now again." : error.message, "error");
+    } finally {
+      editor.readOnly = false;
+      submit.disabled = false;
+    }
+  };
+  const scheduleAutoSave = () => {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => saveRevision(), 1200);
+    autoSaveTimer.unref?.();
+  };
+  editor.addEventListener("input", () => {
+    dirty = true;
+    preview.replaceChildren(projectContentBody(editor.value, {project, content}));
+    reportPresence();
+    setSyncStatus("Local changes waiting to sync…");
+    scheduleAutoSave();
+  });
+  editor.addEventListener("select", reportPresence);
+  reportPresence();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearTimeout(autoSaveTimer);
+    await saveRevision({notify: true});
+  });
+  const syncRemote = async () => {
+    if (saving) return;
+    try {
+      const [latest, activePresence] = await Promise.all([
+        client.projectContent.get(project.id, content.id),
+        client.projectContent.presence(project.id, content.id)
+      ]);
+      renderPresence(activePresence.items ?? []);
+      if (Number(latest.version) <= baseVersion) return;
+      if (dirty) await saveRevision();
+      else {
+        baseBody = String(latest.body ?? "");
+        baseVersion = Number(latest.version);
+        editor.value = baseBody;
+        preview.replaceChildren(projectContentBody(editor.value, {project, content: latest}));
+        setSyncStatus(`Received revision ${baseVersion}.`, "ok");
+      }
+    } catch {
+      if (!dirty) setSyncStatus("Live sync is reconnecting…", "warning");
+    }
+  };
+  syncTimer = setInterval(syncRemote, 2500);
+  syncTimer.unref?.();
+  globalThis.window?.addEventListener?.("pagehide", () => {
+    clearTimeout(autoSaveTimer);
+    clearTimeout(presenceTimer);
+    clearInterval(syncTimer);
+  }, {once: true});
+  return form;
+}
+
+export function projectContentDetail(content, revisions = [], client, {onSaved, project} = {}) {
+  const remove = el("button", {class: "button button--danger", type: "button"}, "Delete");
+  remove.addEventListener("click", async () => {
+    if (!confirm(`Delete “${content.title}”? Its immutable revision history will remain in the audit store.`)) return;
+    remove.disabled = true;
+    try {
+      await client.projectContent.delete(content.projectId, content.id, {version: content.version});
+      onSaved?.();
+    } catch (error) {
+      remove.disabled = false;
+      remove.insertAdjacentElement("afterend", el("span", {class: "form-status error", role: "alert"}, error.message));
+    }
+  });
+  return el("article", {class: "meeting-detail"}, [
+    el("div", {class: "section-heading"}, [el("div", {}, [el("p", {class: "eyebrow"}, content.kind), el("h2", {}, content.title)]), remove]),
+    el("div", {class: "badge-row"}, [badge(content.status, content.status === "published" ? "good" : "neutral"), badge(`Revision ${content.version}`, "info")]),
+    projectContentBody(content.body, {project, content}),
+    el("section", {}, [
+      el("h3", {}, "Revision history"),
+      revisions.length ? dataTable(["Revision", "Editor", "Saved", "Status"], revisions.map((revision) => [String(revision.version), revision.actorId, formatDate(revision.createdAt), revision.status])) : emptyView("No revisions found.")
+    ])
+  ]);
+}
+
+const planningResourceKindOptions = [
+  {value: "version", label: "Version / roadmap release"},
+  {value: "sprint", label: "Sprint"},
+  {value: "baseline", label: "Schedule baseline"},
+  {value: "work-calendar", label: "Work calendar"},
+  {value: "board", label: "Persistent action board"}
+];
+
+const boardDimensionOptions = ["status", "assignee", "team", "version", "sprint", "subproject", "priority", "type"];
+
+export function planningResourceForm(client, project, projects = [], {onSaved, capabilities = {}} = {}) {
+  const submit = el("button", {class: "button button--primary", type: "submit"}, "Create planning resource");
+  const defaultInput = el("input", {name: "default", type: "checkbox"});
+  const kindInput = selectInput("kind", planningResourceKindOptions, "sprint");
+  const versionFields = el("div", {class: "editor-form__section", hidden: "true"}, configuredCustomFieldEditors(capabilities, {}, "version"));
+  const form = el("form", {class: "editor-form editor-form--wide"}, [
+    field("Resource type", kindInput),
+    field("Name", el("input", {name: "name", required: "true", maxlength: "160", placeholder: "Sprint 12 or Release 2.0"})),
+    field("Status", selectInput("status", ["planned", "active", "closed", "archived"], "planned")),
+    field("Start", el("input", {name: "startDate", type: "date"})),
+    field("End", el("input", {name: "endDate", type: "date"})),
+    field("Goal", textareaInput("goal", "Sprint goal, release outcome, or baseline note")),
+    field("Capacity (story points)", el("input", {name: "capacityPoints", type: "number", min: "0", max: "100000", value: "0"})),
+    field("Share with projects", multiSelectInput("sharedProjectIds", projectOptions(projects).slice(1), [])),
+    field("Working weekdays", textInput("workingDays", "1,2,3,4,5 (0 is Sunday)", "1,2,3,4,5")),
+    field("Holidays", textInput("holidays", "2026-12-25, 2027-01-01")),
+    field("Hours per day", el("input", {name: "hoursPerDay", type: "number", min: "1", max: "24", value: "8"})),
+    field("Board columns", selectInput("boardDimension", boardDimensionOptions, "status")),
+    field("Board editor user IDs", textInput("boardEditorIds", "user-one, user-two")),
+    field("Use as project default", defaultInput),
+    field("Description", textareaInput("description", "Planning context and operating notes")),
+    versionFields,
+    submit
+  ]);
+  const syncVersionFields = () => {
+    const enabled = kindInput.value === "version";
+    versionFields.hidden = !enabled;
+    for (const control of versionFields.querySelectorAll("input, select, textarea")) control.disabled = !enabled;
+  };
+  kindInput.addEventListener("change", syncVersionFields);
+  syncVersionFields();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    const data = formValues(form);
+    try {
+      const customFields = data.kind === "version" ? configuredCustomFieldValues(data, capabilities, {}, "version") : {};
+      const saved = await client.planningResources.create({
+        projectId: project.id,
+        kind: data.kind,
+        name: data.name,
+        status: data.status,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        goal: data.goal,
+        description: data.description,
+        capacityPoints: Number(data.capacityPoints ?? 0),
+        sharedProjectIds: [...(form.querySelector('select[name="sharedProjectIds"]')?.selectedOptions ?? [])].map((option) => option.value),
+        workingDays: csvValues(data.workingDays).map(Number),
+        holidays: csvValues(data.holidays),
+        hoursPerDay: Number(data.hoursPerDay ?? 8),
+        boardDimension: data.boardDimension,
+        boardEditorIds: csvValues(data.boardEditorIds),
+        default: Boolean(data.default),
+        customFields
+      });
+      saveStatus(form, `${titleCase(saved.kind)} created.`, "ok");
+      onSaved?.(saved);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return form;
+}
+
+function planningResourceCustomFieldsForm(client, resource, capabilities = {}, {onSaved} = {}) {
+  if (resource.kind !== "version" || !customFieldDefinitions(capabilities, "version").length) return "";
+  const save = el("button", {class: "button", type: "submit"}, "Save version fields");
+  const form = el("form", {class: "editor-form"}, [
+    ...configuredCustomFieldEditors(capabilities, resource.customFields ?? {}, "version"),
+    save
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    const data = formValues(form);
+    try {
+      const saved = await client.planningResources.patch(resource.projectId, resource.id, {
+        version: resource.version,
+        customFields: configuredCustomFieldValues(data, capabilities, resource.customFields ?? {}, "version")
+      });
+      saveStatus(form, "Version fields saved.", "ok");
+      onSaved?.(saved);
+    } catch (error) {
+      save.disabled = false;
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return el("details", {class: "inline-editor"}, [el("summary", {}, "Edit version fields"), form]);
+}
+
+function planningResourceHref(resource) {
+  const params = new URLSearchParams({projectId: resource.projectId, resourceId: resource.id});
+  return `/app/planning?${params}`;
+}
+
+function planningResourceAssignment(client, resource, workItems, {onSaved} = {}) {
+  if (!["version", "sprint"].includes(resource.kind)) return "";
+  const fieldName = resource.kind === "version" ? "versionId" : "sprintId";
+  const selected = workItems.filter((item) => item[fieldName] === resource.id).map((item) => item.id);
+  const taskSelect = multiSelectInput("workItemIds", taskOptions(workItems, "", "No tasks").slice(1), selected);
+  const save = el("button", {class: "button", type: "submit"}, `Save ${resource.kind} backlog`);
+  const form = el("form", {class: "editor-form"}, [field("Backlog tasks", taskSelect), save]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    const chosen = new Set([...(taskSelect.querySelector("select")?.selectedOptions ?? [])].map((option) => option.value));
+    const updates = workItems.filter((item) => chosen.has(item.id) !== (item[fieldName] === resource.id));
+    try {
+      for (const item of updates) {
+        await client.workItems.patch(item.projectId, item.id, {version: item.version, [fieldName]: chosen.has(item.id) ? resource.id : ""});
+      }
+      saveStatus(form, `${updates.length} task links updated.`, "ok");
+      onSaved?.();
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return form;
+}
+
+export function planningResourcesView(resources = [], client, workItems = [], {onSaved, capabilities = {}} = {}) {
+  if (!resources.length) return emptyView("No versions, sprints, baselines, calendars, or saved boards yet.");
+  return el("div", {class: "card-grid"}, resources.map((resource) => {
+    const remove = el("button", {class: "button button--ghost", type: "button"}, "Delete");
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Delete ${resource.kind} “${resource.name}”?`)) return;
+      remove.disabled = true;
+      try {
+        await client.planningResources.delete(resource.projectId, resource.id, {version: resource.version});
+        onSaved?.();
+      } catch (error) {
+        remove.disabled = false;
+        remove.insertAdjacentElement("afterend", el("span", {class: "form-status error", role: "alert"}, error.message));
+      }
+    });
+    return el("article", {class: "metric-card"}, [
+      el("div", {class: "section-heading"}, [el("a", {href: planningResourceHref(resource)}, resource.name), badge(resource.kind, "neutral")]),
+      el("div", {class: "badge-row"}, [badge(resource.status, resource.status === "active" ? "good" : "neutral"), resource.default ? badge("Default", "info") : ""]),
+      resource.goal ? el("p", {}, resource.goal) : "",
+      el("dl", {class: "meeting-card__facts"}, [
+        el("div", {}, [el("dt", {}, "Window"), el("dd", {}, resource.startDate || resource.endDate ? `${formatDate(resource.startDate) || "…"} – ${formatDate(resource.endDate) || "…"}` : "Not dated")]),
+        el("div", {}, [el("dt", {}, "Tasks"), el("dd", {}, String(resource.workItemCount ?? 0))]),
+        el("div", {}, [el("dt", {}, "Points"), el("dd", {}, `${resource.completedPoints ?? 0}/${resource.totalPoints ?? 0}`)]),
+        resource.kind === "board" ? el("div", {}, [el("dt", {}, "Columns"), el("dd", {}, titleCase(resource.boardDimension))]) : ""
+      ]),
+      planningResourceAssignment(client, resource, workItems, {onSaved}),
+      planningResourceCustomFieldsForm(client, resource, capabilities, {onSaved}),
+      remove
+    ]);
+  }));
+}
+
+export function scheduleProjectControl(client, project, {onSaved} = {}) {
+  const run = el("button", {class: "button button--primary", type: "button"}, "Recalculate automatic schedule");
+  const host = el("div", {class: "editor-form"}, [
+    el("p", {}, "Use the default work calendar, dependency lags, estimates, and hierarchy to update automatic tasks and roll up parent totals."),
+    run
+  ]);
+  run.addEventListener("click", async () => {
+    run.disabled = true;
+    try {
+      const result = await client.planning.schedule(project.id);
+      saveStatus(host, `${result.updates.length} tasks scheduled.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`, result.warnings.length ? "warning" : "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(host, error.message, "error");
+    } finally {
+      run.disabled = false;
+    }
+  });
+  return host;
+}
+
+function planningMetricGrid(items) {
+  return el("div", {class: "card-grid"}, items.map((item) => el("article", {class: "metric-card"}, [
+    el("span", {}, item.label),
+    el("strong", {}, String(item.value ?? 0))
+  ])));
+}
+
+export function baselineComparisonView(comparison) {
+  if (!comparison) return emptyView("Choose a baseline to compare current work.");
+  return el("div", {}, [
+    comparison.range ? el("p", {}, `Comparing end of ${comparison.range.from} with end of ${comparison.range.to}.`) : "",
+    comparison.historyComplete === false ? el("p", {class: "status status--warning", role: "status"}, "Some older activity predates historical snapshots; affected changes are listed with incomplete coverage.") : "",
+    planningMetricGrid([
+      {label: "Changed", value: comparison.summary.changed},
+      {label: "Added", value: comparison.summary.added},
+      {label: "Removed", value: comparison.summary.removed},
+      {label: "Unchanged", value: comparison.summary.unchanged}
+    ]),
+    dataTable(["Task", "Change", "Fields"], comparison.items.map((item) => [item.title ?? item.previous?.title ?? item.id, badge(item.change, item.change === "changed" ? "warning" : item.change === "added" ? "good" : "neutral"), (item.changes ?? []).map(titleCase).join(", ") || "—"]))
+  ]);
+}
+
+export function historicalBaselineForm(client, project) {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(`${today}T00:00:00.000Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const form = el("form", {class: "inline-form"}, [
+    field("Compare from", el("input", {name: "from", type: "date", value: yesterday.toISOString().slice(0, 10), max: today, required: "true"})),
+    field("Through", el("input", {name: "to", type: "date", value: today, max: today, required: "true"})),
+    el("button", {class: "button button--primary", type: "submit"}, "Compare history")
+  ]);
+  const result = el("div", {}, emptyView("Choose any retained historical date range, including yesterday, to compare task state."));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      const values = new FormData(form);
+      const comparison = await client.planning.baselineComparison(project.id, {from: values.get("from"), to: values.get("to")});
+      result.replaceChildren(baselineComparisonView(comparison));
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return el("div", {class: "editor-form editor-form--wide"}, [form, result]);
+}
+
+export function sprintBurndownView(burndown) {
+  if (!burndown) return emptyView("Choose a dated sprint to view burndown.");
+  return el("div", {}, [
+    planningMetricGrid([
+      {label: "Committed", value: burndown.totalPoints},
+      {label: "Completed", value: burndown.completedPoints},
+      {label: "Remaining", value: burndown.remainingPoints}
+    ]),
+    dataTable(["Date", "Ideal remaining", "Actual remaining"], burndown.series.map((point) => [point.date, String(point.idealRemaining), point.actualRemaining === undefined ? "—" : String(point.actualRemaining)]))
   ]);
 }
 
@@ -4492,7 +5951,12 @@ export function activityCommentForm(client, project, workItems = [], {onSaved} =
   ];
   const form = el("form", {class: "editor-form editor-form--wide"}, [
     field("Record", selectInput("entityId", entityOptions, project.id)),
-    field("Note", textareaInput("summary", "Decision, blocker, follow-up, or handoff note")),
+    field("Comment", textareaInput("summary", "Use Markdown for decisions, blockers, checklists, or handoffs.")),
+    field("Reply to activity ID", textInput("parentId", "Optional activity ID")),
+    field("Mention user IDs", textInput("mentions", "user-one, user-two")),
+    field("Reactions", textInput("reactions", "👍, ✅")),
+    field("Visibility", selectInput("visibility", [{value: "project", label: "Everyone with project access"}, {value: "internal", label: "Project managers only"}], "project")),
+    field("Personal reminder", el("input", {name: "reminderAt", type: "datetime-local"})),
     el("button", {class: "button button--primary", type: "submit"}, "Add note")
   ]);
   form.addEventListener("submit", async (event) => {
@@ -4504,7 +5968,13 @@ export function activityCommentForm(client, project, workItems = [], {onSaved} =
         projectId: project.id,
         entityType: entityId === project.id ? "project" : "work-item",
         entityId,
-        summary: data.summary
+        summary: data.summary,
+        parentId: data.parentId,
+        mentions: csvValues(data.mentions),
+        reactions: csvValues(data.reactions),
+        visibility: data.visibility,
+        format: "markdown",
+        reminderAt: data.reminderAt ? new Date(data.reminderAt).toISOString() : undefined
       }, {idempotencyKey: crypto.randomUUID()});
       form.reset();
       saveStatus(form, "Note added.", "ok");
@@ -4571,10 +6041,402 @@ export function activityList(items) {
       return href ? el("a", {href}, label) : label;
     })(),
     el("div", {class: "activity-summary"}, [
+      item.parentId ? el("small", {}, `Reply to ${item.parentId}`) : "",
       el("span", {}, item.summary),
-      item.changedFields?.length ? el("small", {}, `Changed: ${item.changedFields.map(titleCase).join(", ")}`) : ""
+      item.mentions?.length ? el("small", {}, `Mentions: ${item.mentions.join(", ")}`) : "",
+      item.reactions?.length ? el("small", {}, `Reactions: ${item.reactions.join(" ")}`) : "",
+      item.reminderAt ? el("small", {}, `Reminder: ${String(item.reminderAt).replace("T", " ").slice(0, 16)} UTC`) : "",
+      item.visibility === "internal" ? badge("Project managers", "warning") : "",
+      item.changedFields?.length && !item.eventType?.startsWith("comment.") ? el("small", {}, `Changed: ${item.changedFields.map(titleCase).join(", ")}`) : ""
     ])
   ]));
+}
+
+export function globalSearchForm(query = "") {
+  return el("form", {class: "filter-form", method: "get", action: "/app/search"}, [
+    field("Search the workspace", el("input", {type: "search", name: "q", value: query, placeholder: "Projects, tasks, meetings, and document metadata", required: "true", maxlength: "200"})),
+    el("button", {class: "button button--primary", type: "submit"}, "Search")
+  ]);
+}
+
+export function globalSearchResults(items = [], query = "") {
+  if (!query) return emptyView("Enter a search term to find workspace records.");
+  if (!items.length) return emptyView(`No workspace records match “${query}”.`);
+  return el("section", {class: "search-results"}, items.map((item) => {
+    const href = item.type === "project"
+      ? projectHref(item.projectId)
+      : item.type === "work-item"
+        ? projectHref(item.projectId, item.id)
+        : item.type === "meeting"
+          ? `/app/meetings?projectId=${encodeURIComponent(item.projectId)}&meetingId=${encodeURIComponent(item.id)}`
+          : ["wiki-page", "news", "forum-topic", "collaborative-document"].includes(item.type)
+            ? `/app/content?projectId=${encodeURIComponent(item.projectId)}&contentId=${encodeURIComponent(item.id)}`
+            : `/app/documents?projectId=${encodeURIComponent(item.projectId)}&search=${encodeURIComponent(item.title)}`;
+    return el("article", {class: "search-result"}, [
+      el("div", {class: "section-heading"}, [el("a", {href}, item.title), badge(titleCase(item.type), "neutral")]),
+      item.summary ? el("p", {}, item.summary) : "",
+      item.updatedAt ? el("small", {}, `Updated ${formatDate(item.updatedAt)}`) : ""
+    ]);
+  }));
+}
+
+export function notificationCenter(center = {}, client, {onSaved = () => location.reload(), filter = center.filter ?? "all"} = {}) {
+  const items = Array.isArray(center) ? center : center.items ?? [];
+  const groups = Array.isArray(center) ? items.map((item) => ({...item, events: [item], eventIds: [item.id], reasons: item.reasons ?? [item.notificationType], totalCount: 1, unreadCount: Number(item.unread !== false)})) : center.groups ?? [];
+  const summary = Array.isArray(center) ? {totalCount: items.length, unreadCount: items.filter((item) => item.unread !== false).length} : center.summary ?? {};
+  const toolbar = el("div", {class: "section-heading"}, [
+    el("nav", {class: "button-group", "aria-label": "Notification filters"}, ["all", "unread", "read"].map((value) => el("a", {
+      class: `button${filter === value ? " button--primary" : ""}`,
+      href: `/app/notifications?filter=${value}`,
+      "aria-current": filter === value ? "page" : undefined
+    }, `${titleCase(value)}${value === "unread" ? ` (${summary.unreadCount ?? 0})` : ""}`))),
+    client && summary.unreadCount ? el("button", {class: "button", type: "button", dataset: {action: "read-all"}}, "Mark all read") : ""
+  ]);
+  const body = groups.length ? dataTable(["Status", "Latest activity", "Record", "Reason", "Actions"], groups.map((group) => {
+    const unread = Number(group.unreadCount ?? 0) > 0;
+    const open = group.projectId && group.entityType === "work-item"
+      ? el("a", {href: projectHref(group.projectId, group.entityId)}, "Open task")
+      : group.projectId ? el("a", {href: projectHref(group.projectId)}, "Open project") : "Workspace";
+    const action = client ? el("button", {class: "button", type: "button"}, unread ? "Mark read" : "Mark unread") : "";
+    action?.addEventListener?.("click", async () => {
+      action.disabled = true;
+      try {
+        await client.notifications.markRead(group.eventIds, unread);
+        onSaved();
+      } catch (error) {
+        action.disabled = false;
+        saveStatus(action.parentElement, error.message, "error");
+      }
+    });
+    return [
+      unread ? badge(`${group.unreadCount} unread`, "info") : badge("Read", "neutral"),
+      el("div", {class: "activity-summary"}, [el("span", {}, group.latestSummary ?? group.summary), el("small", {}, `${formatDate(group.latestAt ?? group.timestamp)} · ${group.totalCount ?? 1} event${Number(group.totalCount ?? 1) === 1 ? "" : "s"}`)]),
+      open,
+      el("div", {class: "badge-list"}, (group.reasons ?? []).map((reason) => badge(titleCase(reason), reason === "reminder" ? "warning" : "neutral"))),
+      action
+    ];
+  })) : emptyActionView(filter === "all" ? "You’re caught up" : `No ${filter} notifications`, "Assignments, task participation, mentions, and personal reminders appear here.", {label: "Open my tasks", href: "/app/work"});
+  const view = el("div", {}, [toolbar, body]);
+  view.querySelector('[data-action="read-all"]')?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      await client.notifications.markAllRead();
+      onSaved();
+    } catch (error) {
+      event.currentTarget.disabled = false;
+      saveStatus(toolbar, error.message, "error");
+    }
+  });
+  return view;
+}
+
+export function notificationPreferencesForm(preferences = {}, client, webhooks = [], projects = [], {onSaved = () => location.reload()} = {}) {
+  const supportedWebhooks = webhooks.filter((item) => item.enabled !== false && ((item.eventTypes ?? item.events ?? []).includes("notification.digest") || (item.eventTypes ?? item.events ?? []).includes("*")));
+  const overrides = new Map((preferences.projectOverrides ?? []).map((item) => [item.projectId, item]));
+  const form = el("form", {class: "editor-form editor-form--wide"}, [
+    field("Notify me when I am", multiSelectInput("participationRules", [
+      {value: "assigned", label: "Assigned"},
+      {value: "accountable", label: "Accountable"},
+      {value: "watching", label: "Watching"}
+    ], preferences.participationRules ?? [])),
+    field("Date alerts", el("span", {class: "check-row"}, [
+      el("input", {name: "dateAlertsEnabled", type: "checkbox", checked: preferences.dateAlertsEnabled === false ? undefined : "true"}),
+      " Include configured upcoming and overdue alerts"
+    ])),
+    field("Email summary", selectInput("emailDigest", ["none", "daily", "weekly"], preferences.emailDigest ?? "none")),
+    field("Email delivery gateway", selectInput("deliveryWebhookId", [{value: "", label: "No gateway"}, ...supportedWebhooks.map((item) => ({value: item.id, label: item.name ?? item.id}))], preferences.deliveryWebhookId ?? "")),
+    field("Delivery hour (UTC)", selectInput("digestHourUtc", Array.from({length: 24}, (_, hour) => ({value: String(hour), label: `${String(hour).padStart(2, "0")}:00 UTC`})), String(preferences.digestHourUtc ?? 8))),
+    field("Weekly delivery day", selectInput("weeklyDay", [
+      {value: "0", label: "Sunday"}, {value: "1", label: "Monday"}, {value: "2", label: "Tuesday"}, {value: "3", label: "Wednesday"},
+      {value: "4", label: "Thursday"}, {value: "5", label: "Friday"}, {value: "6", label: "Saturday"}
+    ], String(preferences.weeklyDay ?? 1))),
+    projects.length ? el("details", {class: "advanced-panel"}, [
+      el("summary", {}, [el("span", {}, "Project-specific participation"), el("small", {}, `${overrides.size} override${overrides.size === 1 ? "" : "s"}`)]),
+      el("div", {class: "editor-form"}, projects.map((project) => {
+        const override = overrides.get(project.id);
+        return el("div", {class: "check-row"}, [
+          el("label", {}, [el("input", {type: "checkbox", name: "overrideProjectIds", value: project.id, checked: override ? "true" : undefined}), ` ${project.name}`]),
+          multiSelectInput(`projectRules:${project.id}`, ["assigned", "accountable", "watching"], override?.participationRules ?? preferences.participationRules ?? [])
+        ]);
+      }))
+    ]) : "",
+    preferences.scheduledDeliveryAvailable === false ? el("p", {class: "status status--warning"}, "Scheduled delivery is disabled for this deployment. Enable the notification worker before choosing daily or weekly summaries.") : "",
+    el("button", {class: "button button--primary", type: "submit"}, "Save notification preferences")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(form);
+    const projectOverrides = values.getAll("overrideProjectIds").map((projectId) => ({
+      projectId: String(projectId),
+      participationRules: values.getAll(`projectRules:${projectId}`).map(String).filter(Boolean)
+    }));
+    const body = {
+      version: preferences.version,
+      participationRules: values.getAll("participationRules").map(String).filter(Boolean),
+      projectOverrides,
+      dateAlertsEnabled: values.has("dateAlertsEnabled"),
+      emailDigest: values.get("emailDigest"),
+      deliveryWebhookId: values.get("deliveryWebhookId"),
+      digestHourUtc: Number(values.get("digestHourUtc")),
+      weeklyDay: Number(values.get("weeklyDay"))
+    };
+    try {
+      await client.notifications.savePreferences(body);
+      saveStatus(form, "Notification preferences saved.", "ok");
+      onSaved();
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function notificationDigestView(digest = {}, client, webhooks = [], preferences = {}) {
+  const supportedWebhooks = webhooks.filter((item) => item.enabled !== false && ((item.eventTypes ?? item.events ?? []).includes("notification.digest") || (item.eventTypes ?? item.events ?? []).includes("*")));
+  const delivery = el("form", {class: "inline-form"}, [
+    field("Email delivery webhook", selectInput("webhookId", [{value: "", label: "Use saved gateway"}, ...supportedWebhooks.map((item) => ({value: item.id, label: item.name ?? item.id}))], preferences.deliveryWebhookId ?? "")),
+    el("button", {class: "button", type: "submit", disabled: digest.frequency === "none" || !supportedWebhooks.length ? "true" : undefined}, "Send digest now")
+  ]);
+  delivery.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await client.notifications.deliverDigest({webhookId: new FormData(delivery).get("webhookId")});
+      saveStatus(delivery, `Digest ${result.delivery.status}.`, result.delivery.status === "delivered" ? "ok" : "error");
+    } catch (error) {
+      saveStatus(delivery, error.message, "error");
+    }
+  });
+  return el("section", {}, [
+    dataTable(["Digest signal", "Value"], [
+      ["Frequency", titleCase(digest.frequency ?? "none")],
+      ["Upcoming or overdue alerts", digest.summary?.dateAlertCount ?? 0],
+      ["Participating tasks", digest.summary?.participatedCount ?? 0],
+      ["Notification events", digest.summary?.notificationCount ?? 0]
+    ]),
+    (digest.dateAlerts ?? []).length ? dataTable(["Rule", "Task", "Due", "Timing"], digest.dateAlerts.map((alert) => [alert.ruleName, el("a", {href: projectHref(alert.workItem.projectId, alert.workItem.id)}, alert.workItem.title), formatDate(alert.workItem.dueDate), alert.daysUntilDue < 0 ? `${Math.abs(alert.daysUntilDue)} days overdue` : alert.daysUntilDue === 0 ? "Due today" : `Due in ${alert.daysUntilDue} days`])) : emptyView("No configured date alerts are due."),
+    delivery
+  ]);
+}
+
+export function applyWorkspaceCapabilities(capabilities = {}) {
+  const branding = capabilities.branding ?? {};
+  const root = document.documentElement;
+  if (/^#[0-9a-f]{6}$/i.test(branding.primaryColor ?? "")) root.style.setProperty("--workspace-primary", branding.primaryColor);
+  else root.style.removeProperty("--workspace-primary");
+  if (/^#[0-9a-f]{6}$/i.test(branding.accentColor ?? "")) root.style.setProperty("--workspace-accent", branding.accentColor);
+  else root.style.removeProperty("--workspace-accent");
+  if (branding.organizationName) document.title = `${branding.organizationName} · Team Spaces`;
+  try {
+    localStorage.setItem("teamspaces.workspaceBranding", JSON.stringify(branding));
+  } catch {
+    // Branding remains active for this page when storage is unavailable.
+  }
+  const brand = document.querySelector(".app-header__brand");
+  const brandName = brand?.querySelector("strong");
+  if (brandName) brandName.textContent = branding.organizationName || "Team Spaces";
+  let brandLogo = brand?.querySelector(".app-header__brand-logo");
+  if (branding.logoUrl && /^https:\/\//.test(branding.logoUrl) && brand) {
+    if (!brandLogo) {
+      brandLogo = el("img", {class: "app-header__brand-logo", alt: ""});
+      brand.prepend(brandLogo);
+    }
+    brandLogo.setAttribute("src", branding.logoUrl);
+  } else brandLogo?.remove();
+  if (branding.faviconUrl && /^https:\/\//.test(branding.faviconUrl)) {
+    const favicon = document.querySelector('link[rel="icon"]');
+    favicon?.setAttribute("href", branding.faviconUrl);
+    let touchIcon = document.querySelector('link[rel="apple-touch-icon"]');
+    if (!touchIcon) {
+      touchIcon = el("link", {rel: "apple-touch-icon"});
+      document.head.append(touchIcon);
+    }
+    touchIcon.setAttribute("href", branding.touchIconUrl && /^https:\/\//.test(branding.touchIconUrl) ? branding.touchIconUrl : branding.faviconUrl);
+  }
+}
+
+export function workspaceCapabilitiesSummary(capabilities = {}) {
+  const counts = [
+    ["Dashboard widgets", capabilities.dashboard?.widgets?.length ?? 0],
+    ["Lifecycle phases", capabilities.lifecycle?.phases?.length ?? 0],
+    ["Typed fields", capabilities.customFields?.length ?? 0],
+    ["Forms and actions", (capabilities.forms?.length ?? 0) + (capabilities.customActions?.length ?? 0)],
+    ["Groups and roles", (capabilities.groups?.length ?? 0) + (capabilities.customRoles?.length ?? 0)],
+    ["Budgets and reports", (capabilities.finance?.budgets?.length ?? 0) + (capabilities.finance?.reportDefinitions?.length ?? 0)],
+    ["Connectors", capabilities.connectors?.length ?? 0],
+    ["Webhooks", capabilities.webhooks?.length ?? 0]
+  ];
+  return el("div", {}, [
+    dataTable(["Capability area", "Configured records"], counts.map(([name, count]) => [name, String(count)])),
+    el("div", {class: "badge-row"}, [
+      badge(capabilities.authentication?.mfaRequired ? "MFA required" : "MFA optional", capabilities.authentication?.mfaRequired ? "good" : "neutral"),
+      badge(`Malware scan ${capabilities.security?.malwareScanning ?? "unknown"}`, capabilities.security?.malwareScanning === "required" ? "good" : "warning"),
+      badge(`External links ${capabilities.outboundLinks?.policy ?? "warn"}`, "info"),
+      badge(capabilities.mcp?.enabled ? "MCP enabled" : "MCP disabled", capabilities.mcp?.enabled ? "good" : "neutral")
+    ])
+  ]);
+}
+
+export function workspaceCapabilitiesEditor(client, capabilities, {onSaved} = {}) {
+  const editable = Object.fromEntries(Object.entries(capabilities).filter(([key]) => !["workspaceId", "createdAt", "updatedAt", "updatedBy"].includes(key)));
+  const editor = el("textarea", {name: "capabilities", rows: "34", spellcheck: "false", class: "code-editor"}, JSON.stringify(editable, null, 2));
+  const save = el("button", {class: "button button--primary", type: "submit"}, "Save capability configuration");
+  const form = el("form", {class: "editor-form editor-form--wide"}, [
+    el("p", {}, "Configure dashboard templates, lifecycle gates, typed fields and forms, custom actions, groups and roles, finance, resource profiles, branding, identity providers, notification rules, webhooks, repositories, connectors, sharing, link controls, upload security, SCIM, MCP, and task policies. Credential values must be stored externally and referenced by name."),
+    field("Versioned workspace capability document", editor),
+    save
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      const payload = JSON.parse(editor.value);
+      payload.version = capabilities.version;
+      const saved = await client.capabilities.patch(payload);
+      applyWorkspaceCapabilities(saved);
+      saveStatus(form, `Capability configuration saved as version ${saved.version}.`, "ok");
+      onSaved?.(saved);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return form;
+}
+
+export function costReportView(report = {}) {
+  const money = (value) => new Intl.NumberFormat(undefined, {style: "currency", currency: report.currency ?? "USD"}).format(Number(value ?? 0));
+  return el("div", {}, [
+    report.definition ? el("p", {class: "view-summary"}, `Configured report: ${report.definition.name} · grouped by ${titleCase(report.definition.groupBy)}`) : "",
+    planningMetricGrid([
+      {label: "Budget", value: money(report.totals?.budget)},
+      {label: "Planned labor", value: money(report.totals?.plannedLaborCost)},
+      {label: "Actual cost", value: money(report.totals?.actualCost)},
+      {label: "Variance", value: money(report.totals?.variance)}
+    ]),
+    dataTable(["Project", "Budget", "Planned labor", "Actual labor", "Unit cost", "Variance"], (report.projects ?? []).map((row) => [row.projectName, money(row.budget), money(row.plannedLaborCost), money(row.actualLaborCost), money(row.unitCost), money(row.variance)]))
+  ]);
+}
+
+export function costReportDefinitionFilter(report = {}, selected = "") {
+  if (!(report.availableDefinitions ?? []).length) return el("p", {class: "view-summary"}, "Add finance.reportDefinitions in workspace capabilities to publish reusable cost-report filters.");
+  return el("form", {class: "filter-form", method: "get", action: "/app/reports"}, [
+    field("Saved cost report", selectInput("definitionId", [{value: "", label: "All projects"}, ...report.availableDefinitions.map((item) => ({value: item.id, label: item.name}))], selected)),
+    el("button", {class: "button button--primary", type: "submit"}, "Run report")
+  ]);
+}
+
+export function resourcePlanView(plan = {}) {
+  return el("div", {}, [
+    planningMetricGrid([
+      {label: "Net capacity", value: formatHours(plan.summary?.capacityMinutes)},
+      {label: "Allocated", value: formatHours(plan.summary?.allocatedMinutes)},
+      {label: "Available", value: formatHours(plan.summary?.availableMinutes)},
+      {label: "Overallocated", value: formatHours(plan.summary?.overallocatedMinutes)}
+    ]),
+    el("p", {class: "view-summary"}, `Week ${plan.weekStart ?? "—"} – ${plan.weekEnd ?? "—"}. Capacity is reduced by time off before planned allocations and active task effort are applied.`),
+    dataTable(["Person", "Skills", "Net capacity", "Planned", "Task effort", "Available", "Utilization", "Projects"], (plan.items ?? []).map((item) => [
+      el("div", {class: "object-cell"}, [el("strong", {}, item.name), item.placeholder ? badge("Placeholder", "neutral") : "", item.overallocatedMinutes ? badge(`${formatHours(item.overallocatedMinutes)} over`, "warning") : ""]),
+      (item.skills ?? []).join(", ") || "—",
+      el("div", {class: "object-cell"}, [formatHours(item.capacityMinutes), item.timeOffMinutes ? el("small", {}, `${formatHours(item.timeOffMinutes)} time off`) : ""]),
+      formatHours(item.configuredMinutes),
+      el("div", {class: "object-cell"}, [formatHours(item.taskMinutes), el("small", {}, `${item.assignedWorkItemCount ?? 0} active tasks`)]),
+      formatHours(item.availableMinutes),
+      `${item.utilizationPercent}%`,
+      (item.projectIds ?? []).map((id) => plan.projects?.find((project) => project.id === id)?.name ?? id).join(", ") || "—"
+    ]))
+  ]);
+}
+
+export function resourcePlannerControls(client, plan = {}, {onSaved = () => location.reload(), canManage = false} = {}) {
+  const projects = plan.projects ?? [];
+  const people = plan.memberships ?? [];
+  const weekStart = plan.weekStart ?? new Date().toISOString().slice(0, 10);
+  const weekEnd = plan.weekEnd ?? weekStart;
+  const filter = el("form", {class: "filter-form", method: "get", action: "/app/reports"}, [
+    field("Week", el("input", {name: "week", type: "date", value: plan.filters?.week ?? weekStart})),
+    field("Project", selectInput("projectId", [{value: "", label: "All projects"}, ...projects.map((project) => ({value: project.id, label: project.name}))], plan.filters?.projectId ?? "")),
+    field("Required skill", textInput("skill", "Optional exact skill", plan.filters?.skill ?? "")),
+    el("button", {class: "button button--primary", type: "submit"}, "Plan week")
+  ]);
+  if (!canManage) return filter;
+  const personOptions = people.map((person) => ({value: person.userId, label: person.name}));
+  const projectOptions = projects.map((project) => ({value: project.id, label: project.name}));
+  const submit = (form, action, success) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      const data = Object.fromEntries(new FormData(form).entries());
+      data.version = plan.version;
+      if (data.hours !== undefined) {
+        data.minutes = Math.round(Number(data.hours) * 60);
+        delete data.hours;
+      } else if (data.minutes !== undefined) data.minutes = Number(data.minutes);
+      data.weeklyMinutes = Number(data.weeklyMinutes);
+      if (typeof data.skills === "string") data.skills = data.skills.split(",").map((item) => item.trim()).filter(Boolean);
+      await action(data);
+      saveStatus(form, success, "ok");
+      onSaved();
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+      button.disabled = false;
+    }
+  });
+  const allocation = el("form", {class: "editor-form"}, [
+    field("Person", selectInput("userId", personOptions, personOptions[0]?.value)),
+    field("Project", selectInput("projectId", projectOptions, plan.filters?.projectId ?? projectOptions[0]?.value)),
+    field("From", el("input", {name: "startDate", type: "date", value: weekStart, required: "true"})),
+    field("Through", el("input", {name: "endDate", type: "date", value: weekEnd, required: "true"})),
+    field("Planned hours", el("input", {name: "hours", type: "number", min: "0", max: "1666", step: "0.5", value: "8", required: "true"})),
+    field("Note", textInput("note", "Role or staffing rationale")),
+    el("button", {class: "button button--primary", type: "submit"}, "Add allocation")
+  ]);
+  submit(allocation, (data) => client.resourcePlanner.saveAllocation(data), "Allocation saved.");
+  const profile = el("form", {class: "editor-form"}, [
+    field("Person", selectInput("userId", personOptions, personOptions[0]?.value)),
+    field("Weekly minutes", el("input", {name: "weeklyMinutes", type: "number", min: "0", max: "10080", step: "30", value: "2400", required: "true"})),
+    field("Skills", textInput("skills", "design, facilitation, backend")),
+    el("button", {class: "button button--primary", type: "submit"}, "Save profile")
+  ]);
+  submit(profile, (data) => client.resourcePlanner.saveProfile(data), "Capacity profile saved.");
+  const timeOff = el("form", {class: "editor-form"}, [
+    field("Person", selectInput("userId", personOptions, personOptions[0]?.value)),
+    field("From", el("input", {name: "startDate", type: "date", value: weekStart, required: "true"})),
+    field("Through", el("input", {name: "endDate", type: "date", value: weekStart, required: "true"})),
+    field("Hours off", el("input", {name: "hours", type: "number", min: "0", max: "1666", step: "0.5", value: "8", required: "true"})),
+    field("Note", textInput("note", "Vacation, holiday, or other leave")),
+    el("button", {class: "button button--primary", type: "submit"}, "Add time off")
+  ]);
+  submit(timeOff, (data) => client.resourcePlanner.saveTimeOff(data), "Time off saved.");
+  const removableRows = (records, remove) => [...new Map(records.map((item) => [item.id, item])).values()].map((item) => {
+    const button = el("button", {class: "button button--danger", type: "button"}, "Remove");
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await remove(item.id, plan.version);
+        onSaved();
+      } catch (error) {
+        button.disabled = false;
+        saveStatus(button.parentElement, error.message, "error");
+      }
+    });
+    return [people.find((person) => person.userId === item.userId)?.name ?? item.userId, item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? item.projectId : "Time off", `${item.startDate} – ${item.endDate}`, formatHours(item.minutes), item.note || "—", button];
+  });
+  const allocationRows = removableRows((plan.items ?? []).flatMap((item) => item.allocations ?? []), (id, version) => client.resourcePlanner.deleteAllocation(id, version));
+  const timeOffRows = removableRows((plan.items ?? []).flatMap((item) => item.timeOff ?? []), (id, version) => client.resourcePlanner.deleteTimeOff(id, version));
+  return el("div", {}, [filter, toolbar([
+    actionPanel("Plan allocation", allocation, {meta: "Person, project, dates, effort"}),
+    actionPanel("Capacity and skills", profile, {meta: "Weekly availability and matching"}),
+    actionPanel("Time off", timeOff, {meta: "Reduce net weekly capacity"})
+  ]), allocationRows.length || timeOffRows.length ? dataTable(["Person", "Scope", "Dates", "Effort", "Note", "Actions"], [...allocationRows, ...timeOffRows]) : emptyView("No configured allocations or time off overlap this week.")]);
+}
+
+export function securityBadgeView(security = {}) {
+  return el("div", {}, [
+    el("div", {class: "badge-row"}, [badge(security.status ?? "unknown", security.status === "secure" ? "good" : security.status === "review" ? "warning" : "danger"), el("strong", {}, `${security.passed ?? 0}/${security.total ?? 0} controls passing`)]),
+    dataTable(["Control", "Status"], Object.entries(security.checks ?? {}).map(([name, passed]) => [titleCase(name), badge(passed ? "Passing" : "Review", passed ? "good" : "warning")]))
+  ]);
 }
 
 export function workspaceSettingsForm(client, workspace, {onSaved} = {}) {
@@ -4709,7 +6571,7 @@ export function accountManagementPanel(client, {accounts = [], currentAccountId 
   ]);
 }
 
-export function profileForm(client, data, {onSaved} = {}) {
+export function profileForm(client, data, {onSaved, capabilities = {}} = {}) {
   const user = data.user ?? {};
   const membership = data.membership ?? {};
   const form = el("form", {class: "editor-form editor-form--wide"}, [
@@ -4718,13 +6580,15 @@ export function profileForm(client, data, {onSaved} = {}) {
     field("Department", textInput("department", "Operations", user.department ?? membership.department ?? "")),
     field("Timezone", textInput("timezone", "America/New_York", user.timezone ?? membership.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "")),
     field("Locale", textInput("locale", "en-US", user.locale ?? membership.locale ?? navigator.language ?? "")),
+    ...configuredCustomFieldEditors(capabilities, membership.customFields ?? user.customFields ?? {}, "user"),
     el("button", {class: "button button--primary", type: "submit"}, "Save profile")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(form).entries());
+    const values = formValues(form);
+    values.customFields = configuredCustomFieldValues(values, capabilities, membership.customFields ?? user.customFields ?? {}, "user");
     try {
-      await client.profile.patch(data);
+      await client.profile.patch(values);
       saveStatus(form, "Profile saved.", "ok");
       onSaved?.();
     } catch (error) {
@@ -4734,22 +6598,49 @@ export function profileForm(client, data, {onSaved} = {}) {
   return form;
 }
 
-export function memberForm(client, {onSaved, projects = []} = {}) {
+export function memberForm(client, {onSaved, projects = [], capabilities = {}} = {}) {
   const form = el("form", {class: "editor-form editor-form--wide"}, [
     field("Email", el("input", {name: "email", type: "email", placeholder: "person@example.com"})),
     field("Name", textInput("name", "Team member")),
     field("Role", selectInput("role", roleOptions, "member")),
     field("Status", selectInput("status", ["active", "invited", "disabled"], "active")),
     field("Project access", multiSelectInput("projectIds", projects.map((project) => ({value: project.id, label: project.name})))),
+    ...configuredCustomFieldEditors(capabilities, {}, "user"),
     el("button", {class: "button button--primary", type: "submit"}, "Save member")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
+    data.customFields = configuredCustomFieldValues(data, capabilities, {}, "user");
     try {
       await client.memberships.create(data, {idempotencyKey: crypto.randomUUID()});
       form.reset();
       saveStatus(form, "Member saved.", "ok");
+      onSaved?.();
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function placeholderForm(client, {onSaved, projects = [], capabilities = {}} = {}) {
+  const form = el("form", {class: "editor-form editor-form--wide"}, [
+    field("Placeholder name", textInput("name", "External designer")),
+    field("Weekly capacity", el("input", {name: "weeklyMinutes", type: "number", min: "0", max: "10080", value: "2400"})),
+    field("Skills", textInput("skills", "design, research")),
+    field("Project access", multiSelectInput("projectIds", projects.map((project) => ({value: project.id, label: project.name})))),
+    ...configuredCustomFieldEditors(capabilities, {}, "user"),
+    el("button", {class: "button button--primary", type: "submit"}, "Create placeholder")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = formValues(form);
+    values.customFields = configuredCustomFieldValues(values, capabilities, {}, "user");
+    try {
+      await client.placeholders.create({...values, weeklyMinutes: Number(values.weeklyMinutes), skills: csvValues(values.skills), status: "active"});
+      form.reset();
+      saveStatus(form, "Placeholder created.", "ok");
       onSaved?.();
     } catch (error) {
       saveStatus(form, error.message, "error");
@@ -4765,18 +6656,20 @@ function projectAccessText(projectIds = [], projectNames = new Map()) {
   return `${names.slice(0, 3).join(", ")} +${names.length - 3} more`;
 }
 
-function memberAccessForm(client, membership, projects = [], {onSaved} = {}) {
+function memberAccessForm(client, membership, projects = [], {onSaved, capabilities = {}} = {}) {
   const form = el("form", {class: "member-access-form"}, [
     field("Name", textInput("name", "Team member", membership.name ?? membership.user?.name ?? "")),
     field("Email", el("input", {name: "email", type: "email", value: membership.email ?? membership.user?.email ?? ""})),
     field("Role", selectInput("role", roleOptions, membership.role ?? "viewer")),
     field("Status", selectInput("status", ["active", "invited", "disabled"], membership.status ?? "active")),
     field("Project access", multiSelectInput("projectIds", projects.map((project) => ({value: project.id, label: project.name})), membership.projectIds ?? [])),
+    ...configuredCustomFieldEditors(capabilities, membership.customFields ?? {}, "user"),
     el("button", {class: "button button--primary", type: "submit"}, "Save access")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formValues(form);
+    data.customFields = configuredCustomFieldValues(data, capabilities, membership.customFields ?? {}, "user");
     try {
       await client.memberships.patch(membership.userId, data);
       saveStatus(form, "Member access saved.", "ok");
@@ -4788,7 +6681,7 @@ function memberAccessForm(client, membership, projects = [], {onSaved} = {}) {
   return form;
 }
 
-function teamMemberCard(client, membership, projects = [], projectNames = new Map(), {onSaved} = {}) {
+function teamMemberCard(client, membership, projects = [], projectNames = new Map(), {onSaved, capabilities = {}} = {}) {
   const status = membership.status ?? "active";
   return el("article", {class: `team-member-card team-member-card--${status}`}, [
     el("div", {class: "team-member-card__heading"}, [
@@ -4797,6 +6690,7 @@ function teamMemberCard(client, membership, projects = [], projectNames = new Ma
         el("span", {}, membership.email ?? membership.user?.email ?? membership.userId)
       ]),
       el("div", {class: "badge-row"}, [
+        membership.placeholder ? badge("Placeholder", "info") : "",
         badge(membership.role ?? "viewer", "neutral"),
         badge(status, status === "disabled" ? "danger" : status === "invited" ? "watch" : "good")
       ])
@@ -4807,12 +6701,12 @@ function teamMemberCard(client, membership, projects = [], projectNames = new Ma
     ]),
     el("details", {class: "member-edit"}, [
       el("summary", {}, "Edit access"),
-      memberAccessForm(client, membership, projects, {onSaved})
+      memberAccessForm(client, membership, projects, {onSaved, capabilities})
     ])
   ]);
 }
 
-export function teamManagementPanel(client, memberships = [], projects = [], {onSaved, showHeading = true} = {}) {
+export function teamManagementPanel(client, memberships = [], projects = [], {onSaved, showHeading = true, capabilities = {}} = {}) {
   const projectNames = new Map(projects.map((project) => [project.id, project.name]));
   return el("section", {class: "team-management", id: "team-access"}, [
     showHeading ? el("div", {class: "section-heading"}, [
@@ -4823,10 +6717,14 @@ export function teamManagementPanel(client, memberships = [], projects = [], {on
     ]) : "",
     el("details", {class: "advanced-panel team-add-member", id: "add-member", open: memberships.length ? undefined : "true"}, [
       el("summary", {}, [el("span", {}, "Add member access"), el("small", {}, "Create or update a workspace membership")]),
-      memberForm(client, {onSaved, projects})
+      memberForm(client, {onSaved, projects, capabilities})
+    ]),
+    el("details", {class: "advanced-panel team-add-placeholder", id: "add-placeholder"}, [
+      el("summary", {}, [el("span", {}, "Add placeholder"), el("small", {}, "Plan capacity before a person has an account")]),
+      placeholderForm(client, {onSaved, projects, capabilities})
     ]),
     memberships.length
-      ? el("div", {class: "team-directory"}, memberships.map((membership) => teamMemberCard(client, membership, projects, projectNames, {onSaved})))
+      ? el("div", {class: "team-directory"}, memberships.map((membership) => teamMemberCard(client, membership, projects, projectNames, {onSaved, capabilities})))
       : emptyView("No team members have been added to this account.")
   ]);
 }
@@ -5055,7 +6953,7 @@ export function membershipTable(memberships, projects = []) {
       el("span", {}, membership.email ?? membership.user?.email ?? membership.userId)
     ]),
     badge(membership.role ?? "viewer", "neutral"),
-    badge(membership.status ?? "active", membership.status === "disabled" ? "danger" : "good"),
+    el("div", {class: "badge-row"}, [membership.placeholder ? badge("Placeholder", "info") : "", badge(membership.status ?? "active", membership.status === "disabled" ? "danger" : "good")]),
     membership.projectIds?.length ? membership.projectIds.map((id) => projectNames.get(id) ?? id).join(", ") : "All projects",
     formatDate(membership.updatedAt)
   ]));
@@ -5118,9 +7016,11 @@ export function documentUploadForm(client, projectsOrProjectId, {onSaved, select
       if (/^https?:\/\//.test(intent.uploadUrl)) {
         await client.documents.putUpload(intent.uploadUrl, file, intent.uploadHeaders);
       }
-      await client.documents.finalize({documentId: intent.documentId ?? intent.document?.id, projectId});
+      const documentId = intent.documentId ?? intent.document?.id;
+      const scan = await client.documents.requestScan(projectId, documentId);
+      if (!scan.scanRequested) await client.documents.finalize({documentId, projectId});
       form.reset();
-      saveStatus(form, "Document saved.", "ok");
+      saveStatus(form, scan.scanRequested ? "Document uploaded and queued for malware scanning." : "Document saved.", "ok");
       onSaved?.();
     } catch (error) {
       saveStatus(form, error.message, "error");
@@ -5156,6 +7056,23 @@ function documentDownloadButton(client, document) {
 }
 
 function documentStatusButton(client, document, onSaved) {
+  if (document.status === "pending") {
+    const clean = document.scanStatus === "clean";
+    const button = el("button", {class: "button", type: "button"}, clean ? "Finalize" : document.scanStatus === "queued" ? "Scan queued" : "Request scan");
+    button.disabled = document.scanStatus === "queued";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        if (clean) await client.documents.finalize({documentId: document.id, projectId: document.projectId});
+        else await client.documents.requestScan(document.projectId, document.id);
+        onSaved?.();
+      } catch (error) {
+        button.disabled = false;
+        button.title = error.message;
+      }
+    });
+    return button;
+  }
   const archived = document.status === "archived";
   const button = el("button", {class: "button", type: "button"}, archived ? "Restore" : "Archive");
   button.addEventListener("click", async () => {
@@ -5318,25 +7235,82 @@ export function csvExportButton(filename, rows) {
   return button;
 }
 
+export function workItemExportButtons(client, projectId = "") {
+  const group = el("div", {class: "button-row", role: "group", "aria-label": "Export work items"});
+  for (const format of ["csv", "xls", "pdf", "atom"]) {
+    const button = el("button", {class: "button", type: "button"}, `Export ${format.toUpperCase()}`);
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const idle = button.textContent;
+      button.textContent = "Preparing...";
+      try {
+        const exported = await client.exports.workItems({projectId: projectId || undefined, format});
+        let bytes;
+        if (exported.base64) {
+          const binary = atob(exported.base64);
+          bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        } else bytes = exported.content;
+        const url = URL.createObjectURL(new Blob([bytes], {type: exported.contentType}));
+        const link = el("a", {href: url, download: exported.filename});
+        link.click();
+        URL.revokeObjectURL(url);
+        button.textContent = idle;
+      } catch (error) {
+        button.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+    group.append(button);
+  }
+  if (projectId) {
+    const gantt = el("button", {class: "button", type: "button"}, "Export Gantt PDF");
+    gantt.addEventListener("click", async () => {
+      gantt.disabled = true;
+      const idle = gantt.textContent;
+      gantt.textContent = "Preparing...";
+      try {
+        const exported = await client.exports.gantt(projectId);
+        const binary = atob(exported.base64);
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], {type: exported.contentType}));
+        el("a", {href: url, download: exported.filename}).click();
+        URL.revokeObjectURL(url);
+        gantt.textContent = idle;
+      } catch (error) {
+        gantt.textContent = error.message;
+      } finally {
+        gantt.disabled = false;
+      }
+    });
+    group.append(gantt);
+  }
+  return group;
+}
+
 export function savedViewForm(client, scope, filters) {
   const form = el("form", {class: "inline-form"}, [
     field("View name", textInput("name", "My filtered projects")),
+    field("Visibility", selectInput("visibility", [{value: "private", label: "Only me"}, {value: "workspace", label: "Share with workspace"}], "private")),
     el("button", {class: "button", type: "submit"}, "Save view")
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = new FormData(form);
-    await client.savedViews.create({name: data.get("name"), scope, filters}, {idempotencyKey: crypto.randomUUID()});
+    await client.savedViews.create({name: data.get("name"), scope, filters, visibility: data.get("visibility")}, {idempotencyKey: crypto.randomUUID()});
     saveStatus(form, "View saved.", "ok");
   });
   return form;
 }
 
-export function projectFilterForm({search = "", health = "", status = ""} = {}) {
+export function projectFilterForm({search = "", health = "", status = "", archived = "", template = "", favorite = ""} = {}) {
   return el("form", {class: "filter-form", method: "get", action: "/app/projects"}, [
     field("Search", el("input", {type: "search", name: "search", placeholder: "Project name", value: search})),
     field("Health", selectInput("health", ["", "on-track", "watch", "at-risk", "blocked"], health)),
     field("Status", selectInput("status", ["", "proposed", "active", "paused", "complete", "archived"], status)),
+    field("Lifecycle", selectInput("archived", [{value: "", label: "All projects"}, {value: "false", label: "Active list"}, {value: "true", label: "Archived only"}], archived)),
+    field("Kind", selectInput("template", [{value: "", label: "Projects and templates"}, {value: "false", label: "Projects only"}, {value: "true", label: "Templates only"}], template)),
+    field("Favorites", selectInput("favorite", [{value: "", label: "All"}, {value: "true", label: "Favorites only"}], favorite)),
     el("button", {class: "button button--primary", type: "submit"}, "Apply"),
     el("a", {class: "button button--ghost", href: "/app/projects"}, "Clear")
   ]);
@@ -5366,6 +7340,492 @@ export function reportTables(summary) {
     dataTable(["Status", "Projects"], entries(summary.byStatus).map((row) => [badge(row.name, statusTone(row.name)), row.value])),
     dataTable(["Phase", "Projects"], entries(summary.byPhase).map((row) => [row.name, row.value])),
     dataTable(["Work status", "Items"], entries(summary.byWorkStatus).map((row) => [badge(row.name, statusTone(row.name)), row.value]))
+  ]);
+}
+
+function integrationConnectorOptions(connectors = []) {
+  return connectors.filter((connector) => connector.enabled !== false).map((connector) => ({value: connector.id, label: `${connector.name ?? connector.id} · ${titleCase(connector.type ?? "connector")}`}));
+}
+
+export function integrationCatalogSummary(catalog = {}) {
+  const connectors = catalog.connectors ?? [];
+  return el("section", {class: "integration-summary"}, [
+    dataTable(["Connector", "Type", "Adapter", "Linked records"], connectors.map((connector) => [
+      el("div", {class: "object-cell"}, [el("strong", {}, connector.name ?? connector.id), connector.baseUrl ? el("a", {href: connector.baseUrl, target: "_blank", rel: "noreferrer"}, connector.baseUrl) : ""]),
+      titleCase(connector.type ?? "connector"),
+      connector.enabled === false
+        ? badge("disabled", "neutral")
+        : connector.adapter?.operational
+          ? badge("operational", "good")
+          : connector.adapter?.supported
+            ? badge(`needs ${connector.adapter.missingConfiguration?.join(", ") || "configuration"}`, "warning")
+            : badge("metadata only", "neutral"),
+      connector.linkedItemCount ?? 0
+    ])),
+    dataTable(["Integration resource", "Configured"], [
+      ["Repository browsers", (catalog.repositories ?? []).length],
+      ["Outbound webhooks", (catalog.webhooks ?? []).length],
+      ["External storage and collaboration connectors", connectors.filter((connector) => ["nextcloud", "onedrive", "sharepoint", "xwiki", "opendesk"].includes(connector.type)).length]
+    ])
+  ]);
+}
+
+function providerResourceUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function providerItemFields(item) {
+  const fields = item.metadata?.fieldValues ?? item.metadata?.fields;
+  return Array.isArray(fields) ? fields : [];
+}
+
+function providerFieldValue(field) {
+  return field.text ?? field.name ?? field.number ?? field.date ?? field.title ?? "Not set";
+}
+
+export function providerIntegrationPanel(client, {projects = [], workItems = [], connectors = [], admin = false, onSaved} = {}) {
+  const operational = connectors.filter((connector) => connector.enabled !== false && connector.adapter?.operational);
+  if (!operational.length) return emptyView("No provider adapter is operational. Add its HTTPS endpoint and external credential reference in Workspace capabilities.");
+  const connector = selectInput("connectorId", integrationConnectorOptions(operational), operational[0]?.id ?? "");
+  const project = selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "");
+  const task = selectInput("workItemId", taskOptions(workItems, project.value), "");
+  project.addEventListener("change", () => replaceSelectOptions(task, taskOptions(workItems, project.value), ""));
+  const results = el("div", {class: "integration-resource-results"}, emptyView("Browse an authenticated provider to select a resource."));
+  const submit = el("button", {class: "button button--primary", type: "submit"}, "Browse provider");
+  const form = el("form", {class: "editor-form"}, [
+    field("Provider", connector),
+    field("Project", project),
+    field("Task", task),
+    field("Folder or space", textInput("path", "Optional provider path")),
+    field("Search", textInput("query", "Optional title or identifier")),
+    submit
+  ]);
+  let resources = [];
+  let projectDetails;
+  let busy = false;
+  const browse = async (values, cursor) => {
+    if (busy) return;
+    busy = true;
+    submit.disabled = true;
+    results.querySelector('[data-load-more]')?.setAttribute("disabled", "true");
+    try {
+      const page = await client.integrations.resources(values.connectorId, {path: values.path, query: values.query, ...(cursor ? {cursor} : {})});
+      resources = cursor ? [...resources, ...(page.items ?? [])] : page.items ?? [];
+      resources = [...new Map(resources.map((item) => [item.id, item])).values()];
+      projectDetails = page.project ?? (cursor ? projectDetails : undefined);
+      const content = [];
+      if (projectDetails) {
+        const href = providerResourceUrl(projectDetails.url);
+        content.push(el("section", {class: "integration-provider-project", "aria-label": "GitHub project"}, [
+          el("h3", {}, href ? el("a", {href, target: "_blank", rel: "noopener noreferrer"}, projectDetails.title) : projectDetails.title),
+          el("p", {}, projectDetails.public === true ? "Public GitHub project" : projectDetails.public === false ? "Private GitHub project" : "Project visibility not supplied"),
+          el("details", {}, [
+            el("summary", {}, "Project fields"),
+            dataTable(["Field", "Type", "Options"], (projectDetails.fields ?? []).map((item) => [item.name, item.dataType, (item.options ?? []).map((option) => option.name).join(", ")]))
+          ]),
+          page.fieldsPageInfo?.hasNextPage ? el("p", {role: "note"}, "Additional project fields were not returned in this response.") : ""
+        ]));
+      }
+      const rows = resources.map((item) => {
+        const link = el("button", {class: "button button--ghost", type: "button"}, "Link");
+        link.addEventListener("click", async () => {
+          if (link.disabled) return;
+          link.disabled = true;
+          try {
+            await client.integrations.link({projectId: project.value, workItemId: task.value || undefined, connectorId: values.connectorId, externalId: item.id, externalUrl: item.externalUrl, title: item.title, linkType: item.linkType ?? "file", metadata: item.metadata ?? {}});
+            link.textContent = "Linked";
+            onSaved?.();
+          } catch (error) {
+            link.disabled = false;
+            link.textContent = error.message;
+          }
+        });
+        const fields = providerItemFields(item);
+        const statusField = fields.find((field) => (field.fieldName ?? "").toLowerCase() === "status");
+        const status = item.metadata?.status ?? (statusField ? providerFieldValue(statusField) : item.metadata?.state ?? "");
+        const fieldDetails = el("div", {class: "integration-item-fields"}, [
+          ...fields.map((field) => el("p", {}, [el("strong", {}, `${field.fieldName ?? "Field"}: `), String(providerFieldValue(field))])),
+          item.metadata?.fieldValuesPageInfo?.hasNextPage ? el("small", {}, "Additional field values were not returned.") : ""
+        ]);
+        const href = providerResourceUrl(item.externalUrl);
+        return [href ? el("a", {href, target: "_blank", rel: "noopener noreferrer"}, item.title) : item.title, badge(item.kind ?? item.linkType ?? "resource", "info"), status, item.path ?? item.metadata?.repository ?? item.id, fieldDetails, link];
+      });
+      const partial = page.filtered || page.redacted || page.truncated || page.itemsPageInfo?.hasNextPage || page.fieldsPageInfo?.hasNextPage;
+      content.push(rows.length ? dataTable(["Provider resource", "Kind", "Status", "Path or repository", "Fields", ""], rows) : emptyView(partial ? "No matching resources were returned in this page." : "The provider returned no matching resources."));
+      if (page.filtered) content.push(el("p", {role: "note"}, "Some board items are outside this connector's repository scope."));
+      if (page.redacted) content.push(el("p", {role: "note"}, "Some board items are unavailable to this provider connection."));
+      if (page.truncated) content.push(el("p", {role: "note"}, "This response is partial; additional items or fields were not returned."));
+      if (page.nextCursor) {
+        const more = el("button", {class: "button", type: "button", "data-load-more": "true"}, "Load more resources");
+        more.addEventListener("click", () => browse(values, page.nextCursor));
+        content.push(more);
+      } else if (page.itemsPageInfo?.hasNextPage) {
+        content.push(el("p", {role: "note"}, "Additional items exist but were not returned in this response."));
+      }
+      results.replaceChildren(...content);
+    } catch (error) {
+      results.replaceChildren(errorView(error));
+    } finally {
+      busy = false;
+      submit.disabled = false;
+    }
+  };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    await browse(values);
+  });
+  const health = el("div", {class: "button-row"}, admin ? operational.map((item) => {
+    const button = el("button", {class: "button", type: "button"}, `Check ${item.name ?? item.id}`);
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const result = await client.integrations.health(item.id);
+        button.textContent = result.ok ? `${item.name ?? item.id} healthy` : `${item.name ?? item.id} unavailable`;
+      } catch (error) {
+        button.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+    return button;
+  }) : []);
+  return el("section", {}, [health, form, results]);
+}
+
+export function providerPermissionSyncForm(client, {projects = [], connectors = [], onSaved} = {}) {
+  const storages = connectors.filter((connector) => connector.adapter?.operational && connector.adapter.capabilities?.includes("managed-permissions"));
+  const form = el("form", {class: "editor-form"}, [
+    field("Project", selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "")),
+    field("Managed storage", selectInput("connectorId", integrationConnectorOptions(storages), storages[0]?.id ?? "")),
+    field("Provider folder or item ID", textInput("resourceId", "Folder path or drive item ID")),
+    el("button", {class: "button button--primary", type: "submit", disabled: storages.length ? undefined : "true"}, "Reconcile access")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await client.integrations.syncPermissions(values.connectorId, {projectId: values.projectId, resourceId: values.resourceId});
+      saveStatus(form, `Reconciled ${result.desiredCount} members; added ${result.added.length}, removed ${result.removed.length}.`, "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function xwikiPageForm(client, {projects = [], workItems = [], connectors = [], onSaved} = {}) {
+  const providers = connectors.filter((connector) => connector.type === "xwiki" && connector.adapter?.operational);
+  const project = selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "");
+  const task = selectInput("workItemId", taskOptions(workItems, project.value), "");
+  project.addEventListener("change", () => replaceSelectOptions(task, taskOptions(workItems, project.value), ""));
+  const form = el("form", {class: "editor-form"}, [
+    field("XWiki provider", selectInput("connectorId", integrationConnectorOptions(providers), providers[0]?.id ?? "")),
+    field("Project", project),
+    field("Task", task),
+    field("Page title", textInput("title", "Project decision record")),
+    field("Space", textInput("space", "Optional XWiki space")),
+    field("Content", textareaInput("content", "# Project decision\n")),
+    el("button", {class: "button button--primary", type: "submit", disabled: providers.length ? undefined : "true"}, "Create and link page")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await client.integrations.createResource(values.connectorId, {...values, workItemId: values.workItemId || undefined, space: values.space || undefined});
+      saveStatus(form, `Created and linked ${result.resource.title}.`, "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function integrationLinksTable(links = [], client, {onSaved} = {}) {
+  if (!links.length) return emptyView("No external records are linked yet.");
+  return dataTable(["External record", "Connector", "Task", "Type", "Updated", ""], links.map((link) => {
+    const remove = el("button", {class: "button button--ghost", type: "button"}, "Unlink");
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      try {
+        await client.integrations.unlink(link.id, {version: link.version});
+        onSaved?.();
+      } catch (error) {
+        remove.disabled = false;
+        remove.textContent = error.message;
+      }
+    });
+    return [
+      link.externalUrl ? el("a", {href: link.externalUrl, target: "_blank", rel: "noreferrer"}, link.title) : link.title,
+      link.connectorId,
+      link.workItemId ? el("a", {href: projectHref(link.projectId, link.workItemId)}, link.workItemId) : "Project level",
+      badge(link.linkType ?? "development", "info"),
+      formatDate(link.updatedAt),
+      remove
+    ];
+  }));
+}
+
+export function repositoriesTable(repositories = []) {
+  if (!repositories.length) return emptyView("No Git or SVN repositories are configured.");
+  return dataTable(["Repository", "Type", "Project", "Revision", "Entries", "Synchronized"], repositories.map((repository) => [
+    el("a", {href: `/app/integrations?repositoryId=${encodeURIComponent(repository.id)}`}, repository.name ?? repository.id),
+    badge(repository.type ?? "git", "info"),
+    repository.projectId ?? "Workspace",
+    repository.revision ?? "Not synchronized",
+    repository.entryCount ?? 0,
+    formatDate(repository.syncedAt) || "Never"
+  ]));
+}
+
+export function repositoryTreeView(tree = {}) {
+  const parent = tree.path?.includes("/") ? tree.path.slice(0, tree.path.lastIndexOf("/")) : "";
+  const rows = (tree.entries ?? []).map((entry) => {
+    const name = entry.path.split("/").at(-1);
+    const href = entry.type === "directory" ? `/app/integrations?repositoryId=${encodeURIComponent(tree.repository.id)}&repositoryPath=${encodeURIComponent(entry.path)}` : entry.externalUrl;
+    return [href ? el("a", {href, ...(entry.externalUrl ? {target: "_blank", rel: "noreferrer"} : {})}, name) : name, badge(entry.type, entry.type === "directory" ? "info" : "neutral"), entry.sizeBytes ?? "", entry.revision ?? tree.revision ?? ""];
+  });
+  return el("section", {}, [
+    el("div", {class: "section-heading"}, [el("strong", {}, `${tree.repository.name ?? tree.repository.id} / ${tree.path || "root"}`), tree.path ? el("a", {class: "button button--ghost", href: `/app/integrations?repositoryId=${encodeURIComponent(tree.repository.id)}&repositoryPath=${encodeURIComponent(parent)}`}, "Parent") : ""]),
+    rows.length ? dataTable(["Path", "Type", "Bytes", "Revision"], rows) : emptyView("This path has no synchronized entries.")
+  ]);
+}
+
+export function repositorySyncForm(client, repositories = [], {onSaved} = {}) {
+  const form = el("form", {class: "editor-form"}, [
+    field("Repository", selectInput("repositoryId", repositories.map((repository) => ({value: repository.id, label: repository.name ?? repository.id})), repositories[0]?.id ?? "")),
+    field("Ref", textInput("ref", "main", "main")),
+    field("Revision", textInput("revision", "commit or SVN revision")),
+    field("Tree entries JSON", textareaInput("entries", '[{"path":"src","type":"directory"},{"path":"README.md","type":"file","sizeBytes":1024,"externalUrl":"https://git.example/repo/README.md"}]')),
+    el("button", {class: "button button--primary", type: "submit", disabled: repositories.length ? undefined : "true"}, "Synchronize snapshot")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await client.repositories.sync(values.repositoryId, {ref: values.ref, revision: values.revision, entries: JSON.parse(String(values.entries))});
+      saveStatus(form, `Synchronized ${result.entryCount} entries.`, "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function integrationLinkForm(client, {projects = [], workItems = [], connectors = [], onSaved} = {}) {
+  const project = selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "");
+  const task = selectInput("workItemId", taskOptions(workItems, project.value), "");
+  project.addEventListener("change", () => replaceSelectOptions(task, taskOptions(workItems, project.value), ""));
+  const form = el("form", {class: "editor-form"}, [
+    field("Project", project),
+    field("Task", task),
+    field("Connector", selectInput("connectorId", integrationConnectorOptions(connectors), connectors[0]?.id ?? "")),
+    field("External identifier", textInput("externalId", "Repository#42 or file ID")),
+    field("Title", textInput("title", "External record title")),
+    field("HTTPS URL", textInput("externalUrl", "https://...")),
+    field("Link type", selectInput("linkType", ["development", "file", "folder", "repository", "issue", "wiki", "collaboration"], "development")),
+    el("button", {class: "button button--primary", type: "submit"}, "Link record")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const linked = await client.integrations.link({...values, workItemId: values.workItemId || undefined, externalUrl: values.externalUrl || undefined, metadata: {linkedFrom: "web"}});
+      saveStatus(form, `Linked ${linked.title}.`, "ok");
+      onSaved?.(linked);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function jiraImportForm(client, {projects = [], connectors = [], onSaved} = {}) {
+  const jiraConnectors = connectors.filter((connector) => connector.type === "jira" && connector.enabled !== false);
+  const form = el("form", {class: "editor-form"}, [
+    field("Project", selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "")),
+    field("Jira connector", selectInput("connectorId", integrationConnectorOptions(jiraConnectors), jiraConnectors[0]?.id ?? "")),
+    field("Issues JSON", textareaInput("issues", '[{"key":"TEAM-1","summary":"Imported task","type":"task","status":"new","externalUrl":"https://jira.example/TEAM-1"}]')),
+    el("button", {class: "button button--primary", type: "submit", disabled: jiraConnectors.length ? undefined : "true"}, "Import Jira issues")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const issues = JSON.parse(String(values.issues));
+      const result = await client.integrations.importJira({projectId: values.projectId, connectorId: values.connectorId, issues});
+      saveStatus(form, `Imported ${result.importedCount} issue${result.importedCount === 1 ? "" : "s"}.`, "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function externalSharesTable(shares = [], client, {onSaved} = {}) {
+  if (!shares.length) return emptyView("No tasks are shared externally.");
+  return dataTable(["Task", "Recipient", "Permissions", "Expires", "Share link", ""], shares.map((share) => {
+    const revoke = el("button", {class: "button button--ghost", type: "button", disabled: share.revokedAt ? "true" : undefined}, share.revokedAt ? "Revoked" : "Revoke");
+    revoke.addEventListener("click", async () => {
+      revoke.disabled = true;
+      try {
+        await client.externalShares.revoke(share.token, {version: share.version});
+        onSaved?.();
+      } catch (error) {
+        revoke.disabled = false;
+        revoke.textContent = error.message;
+      }
+    });
+    return [
+      el("a", {href: projectHref(share.projectId, share.workItemId)}, share.workItemId),
+      `${titleCase(share.targetType)} · ${share.target}`,
+      share.permissions.join(", "),
+      formatDate(share.expiresAt),
+      el("a", {href: `/app/shared?token=${encodeURIComponent(share.token)}`}, "Open"),
+      revoke
+    ];
+  }));
+}
+
+export function externalShareForm(client, {projects = [], workItems = [], onSaved} = {}) {
+  const project = selectInput("projectId", projectOptions(projects), projects[0]?.id ?? "");
+  const task = selectInput("workItemId", taskOptions(workItems, project.value), "");
+  project.addEventListener("change", () => replaceSelectOptions(task, taskOptions(workItems, project.value), ""));
+  const form = el("form", {class: "editor-form"}, [
+    field("Project", project),
+    field("Task", task),
+    field("Recipient kind", selectInput("targetType", ["email", "user", "group"], "email")),
+    field("Recipient", textInput("target", "partner@example.com")),
+    field("Access", selectInput("access", [{value: "read", label: "Read only"}, {value: "comment", label: "Read and comment"}], "comment")),
+    field("Expires", el("input", {name: "expiresAt", type: "date"})),
+    el("button", {class: "button button--primary", type: "submit"}, "Share task")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const share = await client.externalShares.create({projectId: values.projectId, workItemId: values.workItemId, targetType: values.targetType, target: values.target, permissions: values.access === "comment" ? ["read", "comment"] : ["read"], expiresAt: values.expiresAt ? `${values.expiresAt}T23:59:59.000Z` : undefined});
+      saveStatus(form, `Share created. Open /app/shared?token=${share.token}`, "ok");
+      onSaved?.(share);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return form;
+}
+
+export function outboundLinkCheckForm(client) {
+  const result = el("div", {class: "form-status", role: "status"});
+  const form = el("form", {class: "inline-form"}, [
+    field("HTTPS destination", textInput("url", "https://external.example/resource")),
+    el("button", {class: "button button--primary", type: "submit"}, "Check destination"),
+    result
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      let checked = await client.outboundLinks.check({url: new FormData(form).get("url"), sourceType: "integration-center"});
+      if (checked.requiresConfirmation && confirm(`This link leaves Team Spaces for ${checked.host}. Continue?`)) checked = await client.outboundLinks.check({url: checked.url, sourceType: "integration-center", confirmed: true});
+      result.textContent = checked.allowed ? `Allowed by ${checked.policy} policy.` : `Blocked by ${checked.policy} policy.`;
+      result.dataset.state = checked.allowed ? "ok" : "error";
+    } catch (error) {
+      result.textContent = error.message;
+      result.dataset.state = "error";
+    }
+  });
+  return form;
+}
+
+export function directorySyncForm(client, {onSaved} = {}) {
+  const queryDirectory = el("button", {class: "button button--primary", type: "button"}, "Query and synchronize LDAP");
+  const queryStatus = el("p", {class: "form-status", role: "status", "aria-live": "polite"});
+  queryDirectory.addEventListener("click", async () => {
+    queryDirectory.disabled = true;
+    try {
+      const result = await client.directory.ldapSync();
+      queryStatus.textContent = `Synchronized ${result.synchronizedCount} users and ${result.groups?.length ?? 0} groups; disabled ${result.disabledCount ?? 0} missing users.`;
+      queryStatus.dataset.state = "ok";
+      onSaved?.(result);
+    } catch (error) {
+      queryStatus.textContent = error.message;
+      queryStatus.dataset.state = "error";
+    } finally {
+      queryDirectory.disabled = false;
+    }
+  });
+  const form = el("form", {class: "editor-form"}, [
+    field("Directory source", selectInput("source", ["ldap", "scim"], "ldap")),
+    field("Users JSON", textareaInput("users", '[{"externalId":"directory-1","email":"person@example.com","name":"Person","role":"viewer","status":"active","groupIds":[]}]')),
+    el("button", {class: "button button--primary", type: "submit"}, "Synchronize directory")
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await client.directory.sync({source: values.source, users: JSON.parse(String(values.users))});
+      saveStatus(form, `Synchronized ${result.synchronizedCount} users.`, "ok");
+      onSaved?.(result);
+    } catch (error) {
+      saveStatus(form, error.message, "error");
+    }
+  });
+  return el("section", {}, [el("p", {}, "The managed sync connects over verified LDAPS using the external bind credential, maps users, departments and groups, and disables missing directory-managed accounts. The bounded JSON path remains available for SCIM bridges and controlled recovery."), queryDirectory, queryStatus, el("details", {}, [el("summary", {}, "Advanced normalized batch"), form])]);
+}
+
+export function webhookDeliveryPanel(client, webhooks = [], deliveries = [], {onSaved} = {}) {
+  const controls = webhooks.map((webhook) => {
+    const button = el("button", {class: "button", type: "button", disabled: webhook.enabled === false ? "true" : undefined}, `Deliver test to ${webhook.name ?? webhook.id}`);
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const delivery = await client.webhooks.deliver(webhook.id, {eventType: "integration.test", payload: {sentAt: new Date().toISOString()}});
+        button.textContent = titleCase(delivery.status);
+        onSaved?.(delivery);
+      } catch (error) {
+        button.textContent = error.message;
+        button.disabled = false;
+      }
+    });
+    return button;
+  });
+  return el("section", {}, [
+    el("div", {class: "button-row"}, controls.length ? controls : [el("span", {}, "Configure an HTTPS webhook in Workspace capabilities first.")]),
+    deliveries.length ? dataTable(["Webhook", "Event", "Status", "HTTP", "Completed"], deliveries.map((delivery) => [delivery.webhookId, delivery.eventType, badge(delivery.status, delivery.status === "delivered" ? "good" : "danger"), delivery.responseStatus ?? "—", formatDate(delivery.completedAt)])) : emptyView("No webhook deliveries yet.")
+  ]);
+}
+
+export function sharedWorkView(shared, client, {onSaved} = {}) {
+  const {share, project, workItem, activity = []} = shared;
+  const conversation = activityList(activity);
+  const canComment = share.permissions.includes("comment");
+  const comment = el("form", {class: "editor-form"}, [
+    field("Comment", textareaInput("summary", "Add a comment visible to the project team")),
+    el("button", {class: "button button--primary", type: "submit", disabled: canComment ? undefined : "true"}, canComment ? "Post comment" : "Read-only share")
+  ]);
+  comment.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await client.externalShares.comment(share.token, {summary: new FormData(comment).get("summary")});
+      saveStatus(comment, "Comment posted.", "ok");
+      onSaved?.();
+    } catch (error) {
+      saveStatus(comment, error.message, "error");
+    }
+  });
+  return el("section", {class: "shared-work"}, [
+    dataTable(["Shared item", "Details"], [["Project", project.name], ["Task", workItem.title], ["Status", titleCase(workItem.status)], ["Priority", titleCase(workItem.priority)], ["Due", formatDate(workItem.dueDate) || "Not set"], ["Access", share.permissions.join(", ")], ["Expires", formatDate(share.expiresAt)]]),
+    workItem.description ? el("article", {class: "prose-card"}, [el("h2", {}, "Description"), el("p", {}, workItem.description)]) : "",
+    actionPanel("External-safe activity", conversation, {open: true, meta: `${activity.length} records`}),
+    actionPanel("Comment", comment, {open: canComment})
   ]);
 }
 

@@ -9,10 +9,16 @@ function localPort(name, fallback) {
 
 const apiPort = localPort("PORT", 8787);
 const webPort = localPort("WEB_PORT", 3000);
+const realProgramMode = Boolean(process.env.TEAMSPACES_PROGRAM_MANIFEST);
 const localRuntimeConfig = JSON.stringify({
   apiBaseUrl: `http://localhost:${apiPort}/api/v1`,
-  authMode: "demo",
+  authMode: realProgramMode ? "local" : "demo",
   appOrigin: `http://localhost:${webPort}`,
+  publicDemo: {
+    enabled: !realProgramMode,
+    apiBaseUrl: `http://localhost:${apiPort}/api/v1/demo`,
+    resetsAt: "05:00 UTC"
+  },
   cognito: {
     domain: "",
     clientId: "",
@@ -31,7 +37,10 @@ export default {
         {name: "My tasks", path: "/app/work"},
         {name: "Projects", path: "/app/projects"},
         {name: "Planning", path: "/app/planning"},
-        {name: "Meetings", path: "/app/meetings"}
+        {name: "Coordination", path: "/app/coordination"},
+        {name: "Meetings", path: "/app/meetings"},
+        {name: "Search", path: "/app/search"},
+        {name: "Notifications", path: "/app/notifications"}
       ]
     },
     {
@@ -39,6 +48,8 @@ export default {
       pages: [
         {name: "Portfolio", path: "/app/portfolio"},
         {name: "Documents", path: "/app/documents"},
+        {name: "Content", path: "/app/content"},
+        {name: "Integrations", path: "/app/integrations"},
         {name: "Time", path: "/app/time"},
         {name: "Reports", path: "/app/reports"},
         {name: "Settings", path: "/app/admin"}

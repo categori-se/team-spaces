@@ -106,7 +106,7 @@ test("parses query-bound meeting pages and versioned patches", () => {
     version: 3,
     status: "open"
   });
-  assert.throws(() => parseMeetingQuery({limit: "10"}), /projectId is required/);
+  assert.deepEqual(parseMeetingQuery({limit: "10"}), {version: 1, projectId: undefined, limit: 10, cursor: undefined});
   assert.throws(() => parseMeetingPatchInput({projectId: "project-one", version: 3}), /field to update/);
 });
 

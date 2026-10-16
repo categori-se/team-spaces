@@ -44,8 +44,13 @@ export function communityConfiguration(environment = process.env) {
   const costCenterTag = environment.TEAMSPACES_COST_CENTER_TAG || applicationTag;
   const cognitoDomainPrefix = environment.TEAMSPACES_COGNITO_DOMAIN_PREFIX;
   const budgetEmail = environment.TEAMSPACES_BUDGET_EMAIL;
+  const integrationCredentialsSecretName = environment.TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME?.trim();
+  const integrationSyncWorkspaceId = environment.TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID?.trim();
+  const ldapWorkspaceId = environment.TEAMSPACES_LDAP_WORKSPACE_ID?.trim();
+  const ldapLoginLabel = environment.TEAMSPACES_LDAP_LOGIN_LABEL?.trim();
   const enablePublicDemo = booleanEnvironment(environment, "TEAMSPACES_ENABLE_PUBLIC_DEMO", false);
   const publicDemoDomainName = environment.TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME?.trim();
+  const enableScheduledNotifications = booleanEnvironment(environment, "TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS", false);
   const enableOperations = booleanEnvironment(environment, "TEAMSPACES_ENABLE_OPERATIONS", false);
   const enablePitr = booleanEnvironment(environment, "TEAMSPACES_ENABLE_PITR", false);
   const workIndexReady = booleanEnvironment(environment, "TEAMSPACES_WORK_INDEX_READY", false);
@@ -69,6 +74,9 @@ export function communityConfiguration(environment = process.env) {
   if (publicDemoDomainName?.toLowerCase() === domainName?.toLowerCase()) {
     throw new Error("TEAMSPACES_PUBLIC_DEMO_DOMAIN_NAME must differ from TEAMSPACES_DOMAIN_NAME");
   }
+  if ((ldapWorkspaceId || integrationSyncWorkspaceId) && !integrationCredentialsSecretName) {
+    throw new Error("TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME is required when LDAP or managed integration synchronization is enabled");
+  }
 
   return {
     domainName,
@@ -81,8 +89,13 @@ export function communityConfiguration(environment = process.env) {
     costCenterTag,
     cognitoDomainPrefix,
     budgetEmail,
+    integrationCredentialsSecretName,
+    integrationSyncWorkspaceId,
+    ldapWorkspaceId,
+    ldapLoginLabel,
     enablePublicDemo,
     publicDemoDomainName,
+    enableScheduledNotifications,
     enableOperations,
     enablePitr,
     workIndexReady,
@@ -139,8 +152,13 @@ function main() {
     costCenterTag,
     cognitoDomainPrefix,
     budgetEmail,
+    integrationCredentialsSecretName,
+    integrationSyncWorkspaceId,
+    ldapWorkspaceId,
+    ldapLoginLabel,
     enablePublicDemo,
     publicDemoDomainName,
+    enableScheduledNotifications,
     enableOperations,
     enablePitr,
     workIndexReady,
@@ -154,6 +172,7 @@ function main() {
     "-c", "generateWebBucketName=true",
     "-c", `enablePublicDemo=${enablePublicDemo}`,
     ...(publicDemoDomainName ? ["-c", `publicDemoDomainName=${publicDemoDomainName}`] : []),
+    "-c", `enableScheduledNotifications=${enableScheduledNotifications}`,
     "-c", `enableOperations=${enableOperations}`,
     "-c", `enablePitr=${enablePitr}`,
     "-c", "useManagedLogin=false",
@@ -165,6 +184,10 @@ function main() {
     "-c", `ownerTag=${ownerTag}`,
     "-c", `costCenterTag=${costCenterTag}`,
     ...(budgetEmail ? ["-c", `budgetEmail=${budgetEmail}`] : []),
+    ...(integrationCredentialsSecretName ? ["-c", `integrationCredentialsSecretName=${integrationCredentialsSecretName}`] : []),
+    ...(integrationSyncWorkspaceId ? ["-c", `integrationSyncWorkspaceId=${integrationSyncWorkspaceId}`] : []),
+    ...(ldapWorkspaceId ? ["-c", `ldapWorkspaceId=${ldapWorkspaceId}`] : []),
+    ...(ldapLoginLabel ? ["-c", `ldapLoginLabel=${ldapLoginLabel}`] : []),
     ...(cognitoDomainPrefix ? ["-c", `cognitoDomainPrefix=${cognitoDomainPrefix}`] : [])
   ];
 

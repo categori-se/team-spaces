@@ -52,6 +52,14 @@ if (publicDemoDomainName) {
   }
 }
 const budgetEmail = process.env.TEAMSPACES_BUDGET_EMAIL;
+const integrationCredentialsSecretName = process.env.TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME?.trim();
+const integrationSyncWorkspaceId = process.env.TEAMSPACES_INTEGRATION_SYNC_WORKSPACE_ID?.trim();
+const ldapWorkspaceId = process.env.TEAMSPACES_LDAP_WORKSPACE_ID?.trim();
+const ldapLoginLabel = process.env.TEAMSPACES_LDAP_LOGIN_LABEL?.trim();
+if ((ldapWorkspaceId || integrationSyncWorkspaceId) && !integrationCredentialsSecretName) {
+  console.error("TEAMSPACES_INTEGRATION_CREDENTIALS_SECRET_NAME is required when LDAP or managed integration synchronization is enabled");
+  process.exit(1);
+}
 const originVerifySecret = process.env.TEAMSPACES_ORIGIN_SECRET;
 const originVerifyNextSecret = process.env.TEAMSPACES_ORIGIN_SECRET_NEXT;
 const originVerifySecretSlot = process.env.TEAMSPACES_ORIGIN_SECRET_SLOT || "primary";
@@ -78,6 +86,7 @@ const hostedContext = [
     : []),
   "-c", `useManagedLogin=${useManagedLoginValue}`,
   "-c", "enablePublicDemo=true",
+  "-c", `enableScheduledNotifications=${process.env.TEAMSPACES_ENABLE_SCHEDULED_NOTIFICATIONS === "true"}`,
   "-c", "enableOperations=true",
   "-c", "enablePitr=true",
   "-c", "allowLocalAttachmentOrigins=false",
@@ -98,7 +107,11 @@ const hostedContext = [
   "-c", `environmentTag=${environmentTag}`,
   "-c", `ownerTag=${ownerTag}`,
   "-c", `costCenterTag=${costCenterTag}`,
-  ...(budgetEmail ? ["-c", `budgetEmail=${budgetEmail}`] : [])
+  ...(budgetEmail ? ["-c", `budgetEmail=${budgetEmail}`] : []),
+  ...(integrationCredentialsSecretName ? ["-c", `integrationCredentialsSecretName=${integrationCredentialsSecretName}`] : []),
+  ...(integrationSyncWorkspaceId ? ["-c", `integrationSyncWorkspaceId=${integrationSyncWorkspaceId}`] : []),
+  ...(ldapWorkspaceId ? ["-c", `ldapWorkspaceId=${ldapWorkspaceId}`] : []),
+  ...(ldapLoginLabel ? ["-c", `ldapLoginLabel=${ldapLoginLabel}`] : [])
 ];
 
 /**

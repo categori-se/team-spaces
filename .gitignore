@@ -1,5 +1,6 @@
 .DS_Store
 /.ai-workbench/
+.ai-studio/
 /.aws-sam/
 /dist/
 **/dist/

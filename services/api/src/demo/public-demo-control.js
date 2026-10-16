@@ -1,5 +1,6 @@
-// @ts-nocheck
+// @ts-check
 
+import {requestResetOnAccess} from "./on-demand-reset.js";
 import {DynamoDBClient} from "@aws-sdk/client-dynamodb";
 import {DynamoDBDocumentClient, GetCommand, UpdateCommand} from "@aws-sdk/lib-dynamodb";
 import {ServiceUnavailableError, TooManyRequestsError} from "../errors.js";
@@ -15,7 +16,7 @@ const defaultDocumentClient = DynamoDBDocumentClient.from(new DynamoDBClient({})
 
 export class DynamoPublicDemoControl {
   /**
-   * @param {{tableName: string, documentClient?: any, mutationLimit?: number, clock?: () => Date}} options
+   * @param {{tableName: string, documentClient?: Pick<DynamoDBDocumentClient, "send">, mutationLimit?: number, clock?: () => Date, resetFunctionName?: string, invokeReset?: () => Promise<unknown>}} options
    */
   constructor(options) {
     if (!options?.tableName) throw new Error("A public demo table name is required");
@@ -23,6 +24,12 @@ export class DynamoPublicDemoControl {
     this.documentClient = options.documentClient ?? defaultDocumentClient;
     this.mutationLimit = options.mutationLimit ?? Number(process.env.PUBLIC_DEMO_MUTATION_LIMIT ?? publicDemoMutationLimit);
     this.clock = options.clock ?? (() => new Date());
+    this.resetFunctionName = options.resetFunctionName ?? process.env.PUBLIC_DEMO_RESET_FUNCTION_NAME;
+    this.invokeReset = options.invokeReset ?? (async () => {
+      const {LambdaClient, InvokeCommand} = await import("@aws-sdk/client-lambda");
+      const result = await new LambdaClient({}).send(new InvokeCommand({FunctionName:this.resetFunctionName,InvocationType:"Event",Payload:JSON.stringify({source:"teamspaces.public-demo-access"})}));
+      if(result.StatusCode!==202)throw new Error("Demo reset was not accepted");
+    });
   }
 
   async getActive() {
@@ -42,6 +49,18 @@ export class DynamoPublicDemoControl {
     if (result.Item.workspaceId && result.Item.workspaceId !== workspaceId) {
       throw new ServiceUnavailableError("The shared demo configuration is invalid.");
     }
+    if (this.resetFunctionName) {
+      const now = this.clock().getTime();
+      const pointerVersion = Number(result.Item.version ?? 1);
+      const pending = await requestResetOnAccess({pointer:result.Item,now,invoke:this.invokeReset,claim:leaseUntil=>this.documentClient.send(new UpdateCommand({
+        TableName:this.tableName,Key:publicDemoPointerKey,
+        UpdateExpression:"SET #lease = :lease",
+        ConditionExpression:"#version = :version AND (attribute_not_exists(#lease) OR #lease <= :now)",
+        ExpressionAttributeNames:{"#version":"version","#lease":"resetLeaseUntil"},
+        ExpressionAttributeValues:{":version":pointerVersion,":lease":leaseUntil,":now":now}
+      }))});
+      if(pending)throw new ServiceUnavailableError("The shared demo is refreshing after its reset deadline. Please try again shortly.");
+    }
     return {
       activeSlot: slot,
       workspaceId,
@@ -55,13 +74,15 @@ export class DynamoPublicDemoControl {
 
   /**
    * @param {{kind?: string, cap?: number}} policy
-   * @param {{workspaceId: string}} active
+   * @param {{workspaceId: string, resetDate?: string}} active
    */
   async claimMutation(policy, active) {
     const now = this.clock();
     const date = active.resetDate ?? now.toISOString().slice(0, 10);
     const counterName = `created_${String(policy.kind ?? "other").replace(/[^A-Za-z0-9_]/g, "_")}`;
+    /** @type {Record<string, string>} */
     const names = {"#total": "total", "#updatedAt": "updatedAt", "#expiresAt": "expiresAt"};
+    /** @type {Record<string, string | number>} */
     const values = {
       ":one": 1,
       ":limit": this.mutationLimit,
@@ -86,7 +107,7 @@ export class DynamoPublicDemoControl {
         ExpressionAttributeValues: values
       }));
     } catch (error) {
-      if (error?.name === "ConditionalCheckFailedException") {
+      if (error && typeof error === "object" && "name" in error && error.name === "ConditionalCheckFailedException") {
         throw new TooManyRequestsError("The shared demo has reached its daily edit limit. It will reset automatically.");
       }
       throw error;
@@ -101,8 +122,10 @@ export class DynamoPublicDemoControl {
 }
 
 export function createDynamoPublicDemoControlFromEnv() {
+  const tableName = process.env.TABLE_NAME;
+  if (!tableName) throw new Error("A public demo table name is required");
   return new DynamoPublicDemoControl({
-    tableName: process.env.TABLE_NAME,
+    tableName,
     mutationLimit: Number(process.env.PUBLIC_DEMO_MUTATION_LIMIT ?? publicDemoMutationLimit)
   });
 }

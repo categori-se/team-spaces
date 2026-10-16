@@ -6,7 +6,7 @@ title: Planning
 
 ```js
 import {apiClient} from "../lib/api.js";
-import {actionPanel, buttonLink, configureWorkTaxonomy, cursorPager, errorView, intakePlanner, milestoneBoard, milestoneDefinitionForm, pageHeader, periodBoard, periodDefinitionForm, periodPlanTable, planningDashboard, planningWorkbench, taskCreatePanel, teamWorkloadBoard, toolbar, workflowStepDefinitionForm, workspaceTopNav, workstreamDefinitionForm} from "../components/ui.js";
+import {actionPanel, baselineComparisonView, buttonLink, configureWorkTaxonomy, cursorPager, errorView, historicalBaselineForm, intakePlanner, milestoneBoard, milestoneDefinitionForm, pageHeader, periodBoard, periodDefinitionForm, periodPlanTable, planningDashboard, planningResourceForm, planningResourcesView, planningWorkbench, scheduleProjectControl, sprintBurndownView, taskCreatePanel, teamWorkloadBoard, toolbar, workflowStepDefinitionForm, workspaceTopNav, workstreamDefinitionForm} from "../components/ui.js";
 ```
 
 ```js
@@ -15,6 +15,7 @@ const client = await apiClient();
 const refreshPage = () => location.reload();
 const pageParams = new URLSearchParams(location.search);
 const selectedProjectId = pageParams.get("projectId") ?? "";
+const selectedResourceId = pageParams.get("resourceId") ?? "";
 const cursor = pageParams.get("cursor") ?? "";
 const result = await Promise.all([
   client.planning.dashboard({projectId: selectedProjectId || undefined, cursor: cursor || undefined, signal: invalidation}),
@@ -31,6 +32,7 @@ if (result instanceof Error) {
   const [planning, workspace, memberships, savedViews] = result;
   configureWorkTaxonomy(workspace.workConfiguration);
   const selectedProject = selectedProjectId ? workspace.projects.find((project) => project.id === selectedProjectId) : undefined;
+  const canManageProject = ["workspace-admin", "portfolio-manager", "project-manager"].includes(workspace.membership?.role);
   const visibleItems = planning.items;
   const currentPeriodId = planning.summary.currentPeriod?.id ?? "unscheduled";
   const periodItems = currentPeriodId === "unscheduled"
@@ -51,10 +53,33 @@ if (result instanceof Error) {
     savedViews: savedViews.items,
     selectedProjectId,
     workConfiguration: workspace.workConfiguration,
+    capabilities: workspace.capabilities,
     canManageColumns: workspace.membership?.role === "workspace-admin" || client.isPublicDemo
   }));
   display(cursorPager(planning.pageInfo, {path: "/app/planning", params: {projectId: selectedProjectId}, hasCursor: Boolean(cursor)}));
-  display(actionPanel("Create task", taskCreatePanel(client, workspace.projects, {onSaved: refreshPage, selectedProjectId, memberships: memberships.items, workItems: visibleItems, id: ""}), {id: "new-task", open: !visibleItems.length, meta: "Project, owner, dates, notes"}));
+  display(actionPanel("Create task", taskCreatePanel(client, workspace.projects, {onSaved: refreshPage, selectedProjectId, memberships: memberships.items, workItems: visibleItems, capabilities: workspace.capabilities, id: ""}), {id: "new-task", open: !visibleItems.length, meta: "Project, owner, dates, notes, configured fields"}));
+  if (selectedProject) {
+    const resourceResult = await client.planningResources.list(selectedProject.id, {limit: 100, signal: invalidation}).catch((error) => error);
+    if (resourceResult instanceof Error) {
+      display(errorView(resourceResult, refreshPage));
+    } else {
+      const selectedResource = resourceResult.items.find((resource) => resource.id === selectedResourceId);
+      const insight = selectedResource?.kind === "baseline"
+        ? await client.planningResources.baselineComparison(selectedProject.id, selectedResource.id, {signal: invalidation}).catch((error) => error)
+        : selectedResource?.kind === "sprint"
+          ? await client.planningResources.burndown(selectedProject.id, selectedResource.id, {signal: invalidation}).catch((error) => error)
+          : undefined;
+      if (insight instanceof Error) display(errorView(insight, refreshPage));
+      else if (selectedResource?.kind === "baseline") display(actionPanel(`Baseline: ${selectedResource.name}`, baselineComparisonView(insight), {open: true, meta: `Captured ${selectedResource.capturedAt?.slice(0, 10) ?? "snapshot"}`}));
+      else if (selectedResource?.kind === "sprint") display(actionPanel(`Burndown: ${selectedResource.name}`, sprintBurndownView(insight), {open: true, meta: `${selectedResource.startDate} – ${selectedResource.endDate}`}));
+      display(actionPanel("Project planning resources", planningResourcesView(resourceResult.items, client, visibleItems, {onSaved: refreshPage, capabilities: workspace.capabilities}), {open: true, meta: "Versions, sprints, baselines, calendars, and boards"}));
+      display(actionPanel("Historical baseline comparison", historicalBaselineForm(client, selectedProject), {open: false, meta: "Yesterday or any retained date range"}));
+      if (canManageProject) display(toolbar([
+        actionPanel("Automatic scheduling", scheduleProjectControl(client, selectedProject, {onSaved: refreshPage}), {meta: "Calendars, dependencies, and rollups"}),
+        actionPanel("Create planning resource", planningResourceForm(client, selectedProject, workspace.projects, {onSaved: refreshPage, capabilities: workspace.capabilities}), {id: "new-planning-resource", meta: "Version, sprint, baseline, calendar, or board"})
+      ]));
+    }
+  }
   const planningTools = [
     actionPanel("Planning setup", toolbar([
       actionPanel("Define time period", periodDefinitionForm(client, workspace.projects, {onSaved: refreshPage, selectedProjectId}), {meta: "Named delivery window"}),

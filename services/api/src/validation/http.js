@@ -38,6 +38,9 @@ export function parseListOptions(searchParams) {
     category: searchParams.get("category") ?? undefined,
     priority: searchParams.get("priority") ?? undefined,
     phase: searchParams.get("phase") ?? undefined,
+    archived: searchParams.get("archived") ?? undefined,
+    template: searchParams.get("template") ?? undefined,
+    favorite: searchParams.get("favorite") ?? undefined,
     sort: searchParams.get("sort") ?? undefined
   };
 }

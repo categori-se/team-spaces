@@ -1,6 +1,6 @@
 # Team Spaces
 
-Team Spaces is an Apache-2.0 open-source project and work-management application for small teams. All implemented product capabilities—web application, API, authorization, projects, planning, meetings, documents, time, reports, activity, migrations, and AWS infrastructure—live in this repository; planned gaps remain visible on the public roadmap.
+Team Spaces is an Apache-2.0 open-source project and work-management application for small teams. Its audited product core has functional parity with OpenProject 17.7.2 across projects, work, planning, collaboration, administration, integrations, API, and AWS infrastructure. The conservative [OpenProject parity matrix](docs/openproject-parity.md) defines that claim and its evidence; BIM and native mobile remain separately tagged.
 
 You can run the application locally or deploy it into an AWS account you control. A future managed Team Spaces service may sell provisioning, upgrades, monitoring, backups, support, and other operational conveniences, but it should run the same product core rather than a deliberately restricted community edition. See [editions and ownership](docs/editions.md) and the [public-core/private-operator repository model](docs/repository-model.md).
 
@@ -21,9 +21,10 @@ That principle does not mean an AWS bill is guaranteed to be zero. Requests, dat
 - AWS CDK infrastructure under `infra` with request and concurrency ceilings.
 - A local in-memory adapter for development and tests.
 - An optional isolated, bounded public demo for a shared showcase deployment.
-- OpenAPI, architecture, access-pattern, security, cost, migration, and recovery documentation.
+- A role-based coordination view connecting real, publicly readable community tasks and authenticated private work, with private task/run synchronization.
+- OpenAPI, parity, architecture, access-pattern, security, cost, migration, and recovery documentation.
 
-The implementation is incremental. Consult the [public roadmap](docs/roadmap.md) and [product scope](docs/product-scope.md) for what is implemented and what remains planned.
+Consult the [functional parity matrix](docs/openproject-parity.md), [public roadmap](docs/roadmap.md), and [product scope](docs/product-scope.md) for the exact implementation and separately tracked surfaces.
 
 ## Local development
 
@@ -104,10 +105,12 @@ npm run scan:secrets
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Public and private project coordination](docs/coordination.md)
 - [AWS self-hosting](docs/self-hosting/aws.md)
 - [Community core and managed operations](docs/editions.md)
 - [Public-core/private-operator repository model](docs/repository-model.md)
 - [Roadmap](docs/roadmap.md)
+- [OpenProject functional parity](docs/openproject-parity.md)
 - [Cost model](docs/cost-model.md)
 - [DynamoDB access patterns and migrations](docs/access-patterns.md)
 - [Authorization matrix](docs/authorization-matrix.md)

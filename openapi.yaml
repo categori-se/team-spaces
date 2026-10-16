@@ -3,7 +3,8 @@ info:
   title: Team Spaces API
   version: 0.1.0
   description: >-
-    Authenticated workspace API plus a deliberately bounded shared-demo surface.
+    Authenticated workspace API, a registered read-only public tracker, and a bounded shared-demo surface.
+    Public coordination reads current canonical community work through a server-owned registration.
     Public-demo requests use the /demo prefix, a server-owned fictional identity,
     an isolated disposable data store, and a daily reset; they never grant access
     to authenticated workspace data.
@@ -61,6 +62,190 @@ components:
             workConfiguration: {$ref: "#/components/schemas/WorkConfiguration"}
             publicDemo: {$ref: "#/components/schemas/PublicDemoMetadata"}
         correlationId: {type: string}
+    ProjectCoordination:
+      type: object
+      additionalProperties: false
+      required: [initiativeId, facet]
+      properties:
+        initiativeId: {type: string, maxLength: 128}
+        facet: {type: string, enum: [community, internal]}
+        key: {type: string, maxLength: 128, description: Optional immutable creation key within this workspace and facet.}
+        repository:
+          type: object
+          additionalProperties: false
+          required: [url, visibility]
+          properties:
+            url: {type: string, format: uri}
+            branch: {type: string, maxLength: 200, default: main}
+            visibility: {type: string, enum: [public, private]}
+        githubProject:
+          type: object
+          additionalProperties: false
+          required: [url, visibility]
+          properties:
+            url: {type: string, format: uri}
+            visibility: {type: string, enum: [public, private]}
+    TaskCoordination:
+      type: object
+      additionalProperties: false
+      required: [roleId]
+      properties:
+        roleId: {type: string, enum: [coordinator, ui-ux, workflow-review, feature-delivery, maintenance]}
+        sourceId: {type: string, maxLength: 128}
+        taskKey: {type: string, maxLength: 128}
+        scopePaths: {type: array, maxItems: 30, items: {type: string, maxLength: 300}}
+        nextAction: {type: string, maxLength: 2000}
+        decision: {type: string, maxLength: 2000}
+        acceptanceState: {type: string, enum: [pending, review, accepted], default: pending}
+        evidence:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [label, url]
+            properties:
+              label: {type: string, maxLength: 160}
+              url: {type: string, format: uri, description: HTTPS or explicit local loopback HTTP; never credentials.}
+              visibility: {type: string, enum: [private, public], default: private}
+        run:
+          type: object
+          additionalProperties: false
+          required: [id, state, updatedAt]
+          properties:
+            id: {type: string, maxLength: 128}
+            state: {type: string, enum: [planned, queued, claimed, preparing, running, succeeded, failed, interrupted, cancelled, candidate-ready, no-changes]}
+            updatedAt: {type: string, format: date-time}
+            sourceRevision: {type: string, maxLength: 160}
+            url: {type: string, format: uri}
+    PublicCoordinationDashboard:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, initiativeId, title, audience, sample, readOnly, canManage, canSetup, roles, projects, tasks, summary, truncated, workConfiguration]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        initiativeId: {type: string, maxLength: 128}
+        title: {type: string, maxLength: 240}
+        audience: {type: string, const: public}
+        sample: {type: boolean, const: false}
+        readOnly: {type: boolean, const: true}
+        canManage: {type: boolean, const: false}
+        canSetup: {type: boolean, const: false}
+        truncated: {type: boolean, const: false, description: Oversized trackers fail closed instead of publishing partial totals.}
+        roles:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name, responsibility]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              responsibility: {type: string}
+        projects:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name, coordination]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              coordination:
+                type: object
+                additionalProperties: false
+                required: [initiativeId, facet]
+                properties:
+                  initiativeId: {type: string}
+                  facet: {type: string, const: community}
+                  repository:
+                    type: object
+                    additionalProperties: false
+                    required: [url, visibility]
+                    properties:
+                      url: {type: string, format: uri}
+                      visibility: {type: string, const: public}
+                  githubProject:
+                    type: object
+                    additionalProperties: false
+                    required: [url, visibility]
+                    properties:
+                      url: {type: string, format: uri}
+                      visibility: {type: string, const: public}
+        tasks:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, projectId, title, status, priority, blockedBy, blocked, acceptanceCriteria, coordination]
+            properties:
+              id: {type: string}
+              projectId: {type: string}
+              title: {type: string}
+              status: {type: string}
+              priority: {type: string}
+              blockedBy: {type: array, items: {type: string}, description: Only dependencies whose project and task are visible in this response.}
+              blocked: {type: boolean, description: Current public task status, unresolved public decision, or unaccepted visible dependency.}
+              acceptanceCriteria: {type: string}
+              coordination:
+                type: object
+                additionalProperties: false
+                required: [roleId, nextAction, parityIds, acceptanceState, evidence]
+                properties:
+                  roleId: {type: string}
+                  nextAction: {type: string}
+                  decision: {type: string}
+                  parityIds: {type: array, items: {type: string}}
+                  acceptanceState: {type: string, enum: [pending, review, accepted]}
+                  evidence:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [label, url, visibility]
+                      properties:
+                        label: {type: string}
+                        url: {type: string, format: uri, description: Explicitly public HTTPS link without credentials, query capabilities, fragments or local addresses.}
+                        visibility: {type: string, const: public}
+        summary:
+          type: object
+          additionalProperties: false
+          required: [total, accepted, running, blocked, review, ready, backlog]
+          properties:
+            total: {type: integer, minimum: 0}
+            accepted: {type: integer, minimum: 0}
+            running: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+            review: {type: integer, minimum: 0}
+            ready: {type: integer, minimum: 0, description: Ready status with no current blocker or unresolved decision.}
+            backlog: {type: integer, minimum: 0, description: Intake and other unstarted statuses; never counted as ready.}
+        parityBaseline:
+          type: object
+          additionalProperties: false
+          description: Optional reviewed parity-row baseline, separate from current task counts; the sum must not exceed 1000.
+          required: [pass, partial, exclusion]
+          properties:
+            pass: {type: integer, minimum: 0, maximum: 1000}
+            partial: {type: integer, minimum: 0, maximum: 1000}
+            exclusion: {type: integer, minimum: 0, maximum: 1000}
+            reference: {type: string, minLength: 1, maxLength: 160, description: Version and evidence scope of the historical comparison.}
+        workConfiguration:
+          type: object
+          additionalProperties: false
+          required: [statuses]
+          properties:
+            statuses:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, label, closed]
+                properties:
+                  id: {type: string}
+                  label: {type: string}
+                  closed: {type: boolean}
     Project:
       type: object
       required: [id, workspaceId, name, ownerId, status, health, priority, phase, version]
@@ -68,6 +253,7 @@ components:
         id: {type: string}
         workspaceId: {type: string}
         portfolioId: {type: string}
+        parentProjectId: {type: string}
         name: {type: string}
         description: {type: string}
         ownerId: {type: string}
@@ -78,6 +264,14 @@ components:
         startDate: {type: string}
         targetDate: {type: string}
         percentComplete: {type: integer}
+        modules: {type: array, items: {type: string}}
+        template: {type: boolean}
+        favorite: {type: boolean}
+        archived: {type: boolean}
+        initiationStatus: {type: string}
+        customFields: {type: object, additionalProperties: true}
+        tags: {type: array, items: {type: string}}
+        coordination: {$ref: "#/components/schemas/ProjectCoordination"}
         version: {type: integer}
     WorkItem:
       type: object
@@ -93,10 +287,15 @@ components:
         status: {type: string}
         priority: {type: string}
         assigneeId: {type: string}
+        teamId: {type: string}
+        accountableId: {type: string}
         reporterId: {type: string}
+        coordination: {$ref: "#/components/schemas/TaskCoordination"}
         startDate: {type: string}
         dueDate: {type: string}
         estimateMinutes: {type: integer}
+        remainingMinutes: {type: integer}
+        percentComplete: {type: integer, minimum: 0, maximum: 100}
         recordedMinutes: {type: integer}
         effortPoints: {type: integer, description: Bounded effort estimate used for planning and workload summaries.}
         periodId: {type: string, description: Optional stable identifier for a named time period.}
@@ -116,7 +315,10 @@ components:
         acceptanceCriteria: {type: string}
         customFields:
           type: object
-          additionalProperties: {type: string}
+          additionalProperties: true
+        relations:
+          type: array
+          items: {type: object, additionalProperties: true}
         tags:
           type: array
           items: {type: string}
@@ -237,6 +439,14 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {type: string, maxLength: 128}
+        attendance:
+          type: array
+          items: {type: object, additionalProperties: true}
+        recurrence: {type: object, additionalProperties: true}
+        seriesId: {type: string}
+        attachmentIds: {type: array, items: {type: string}}
+        invitationMessage: {type: string}
+        template: {type: boolean}
         agendaItems:
           type: array
           maxItems: 50
@@ -267,6 +477,11 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {type: string, maxLength: 128}
+        attendance: {type: array, items: {type: object, additionalProperties: true}}
+        recurrence: {type: object, additionalProperties: true}
+        attachmentIds: {type: array, items: {type: string}}
+        invitationMessage: {type: string}
+        template: {type: boolean}
         agendaItems:
           type: array
           maxItems: 50
@@ -300,6 +515,11 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {type: string, maxLength: 128}
+        attendance: {type: array, items: {type: object, additionalProperties: true}}
+        recurrence: {type: [object, "null"], additionalProperties: true}
+        attachmentIds: {type: array, items: {type: string}}
+        invitationMessage: {type: string}
+        template: {type: boolean}
         agendaItems:
           type: array
           maxItems: 50
@@ -376,7 +596,363 @@ components:
       properties:
         data: {$ref: "#/components/schemas/DocumentUploadIntent"}
         correlationId: {type: string}
+    VersionInput:
+      type: object
+      required: [version]
+      properties:
+        version: {type: integer, minimum: 1}
+    CustomFieldValues:
+      type: object
+      description: >-
+        Values keyed by configured custom-field ID. The server validates the
+        field type and entity section and calculates configured derived values.
+      maxProperties: 50
+      additionalProperties:
+        oneOf:
+          - {type: string, maxLength: 100000}
+          - {type: number}
+          - {type: boolean}
+          - {type: array, maxItems: 50, items: {oneOf: [{type: string}, {type: number}]}}
+          - {type: "null"}
+    MembershipInput:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email}
+        name: {type: string}
+        role: {type: string}
+        status: {type: string, enum: [active, invited, disabled]}
+        projectIds: {type: array, items: {type: string}}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+    TimeEntryInput:
+      type: object
+      required: [entryDate, durationMinutes]
+      properties:
+        projectId: {type: string}
+        workItemId: {type: string}
+        entryDate: {type: string, format: date}
+        durationMinutes: {type: integer, minimum: 1, maximum: 1440}
+        startedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        description: {type: string}
+        billable: {type: boolean}
+        activityId: {type: string, default: general}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+    TimeEntryPatchInput:
+      type: object
+      required: [version, originalEntryDate]
+      properties:
+        version: {type: integer, minimum: 1}
+        originalEntryDate: {type: string, format: date}
+        entryDate: {type: string, format: date}
+        durationMinutes: {type: integer, minimum: 1, maximum: 1440}
+        startedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        description: {type: string}
+        billable: {type: boolean}
+        activityId: {type: string}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+    TimerStartInput:
+      type: object
+      properties:
+        projectId: {type: string}
+        workItemId: {type: string}
+        description: {type: string, maxLength: 1000}
+        billable: {type: boolean}
+        activityId: {type: string, default: general}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+    NotificationPreferences:
+      type: object
+      required: [version, participationRules, projectOverrides, dateAlertsEnabled, emailDigest, deliveryWebhookId, digestHourUtc, weeklyDay]
+      properties:
+        version: {type: integer, minimum: 1}
+        participationRules:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [assigned, accountable, watching]}
+        projectOverrides:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [projectId, participationRules]
+            properties:
+              projectId: {type: string}
+              participationRules:
+                type: array
+                uniqueItems: true
+                items: {type: string, enum: [assigned, accountable, watching]}
+        dateAlertsEnabled: {type: boolean}
+        emailDigest: {type: string, enum: [none, daily, weekly]}
+        deliveryWebhookId: {type: string, maxLength: 128}
+        digestHourUtc: {type: integer, minimum: 0, maximum: 23}
+        weeklyDay: {type: integer, minimum: 0, maximum: 6}
+        scheduledDeliveryAvailable: {type: boolean, readOnly: true}
+        lastDeliveredAt: {type: string, format: date-time, readOnly: true}
+        lastDeliveryStatus: {type: string, readOnly: true}
+    WorkspaceCapabilities:
+      type: object
+      description: >-
+        Versioned workspace policy document for dashboard widgets, lifecycle and
+        initiation gates, priorities, typed fields/forms/actions, groups and custom
+        roles, costs/resources, branding, identity, notifications, integrations,
+        sharing, malware scanning, SCIM, MCP, and work-item behavior.
+      required: [schemaVersion, version]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        version: {type: integer, minimum: 1}
+      additionalProperties: true
+    PlanningResource:
+      type: object
+      required: [id, projectId, kind, name, status, version]
+      properties:
+        id: {type: string}
+        projectId: {type: string}
+        kind: {type: string, enum: [version, sprint, baseline, work-calendar, board]}
+        name: {type: string}
+        status: {type: string}
+        sharedProjectIds: {type: array, items: {type: string}}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+        version: {type: integer}
+      additionalProperties: true
+    PlanningResourceInput:
+      type: object
+      required: [projectId, kind, name]
+      properties:
+        projectId: {type: string}
+        kind: {type: string, enum: [version, sprint, baseline, work-calendar, board]}
+        name: {type: string, maxLength: 160}
+        description: {type: string, maxLength: 10000}
+        status: {type: string, enum: [planned, active, closed, archived]}
+        startDate: {type: string, format: date}
+        endDate: {type: string, format: date}
+        goal: {type: string, maxLength: 2000}
+        sharedProjectIds: {type: array, items: {type: string}}
+        customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+      additionalProperties: true
+    ProjectContent:
+      type: object
+      required: [id, projectId, kind, title, body, format, status, version]
+      properties:
+        id: {type: string}
+        projectId: {type: string}
+        kind: {type: string, enum: [wiki-page, document, news, forum-topic]}
+        title: {type: string, maxLength: 240}
+        body: {type: string, maxLength: 100000}
+        format: {type: string, enum: [plain, markdown]}
+        status: {type: string, enum: [draft, published, locked, archived]}
+        parentId: {type: string}
+        tags: {type: array, items: {type: string}}
+        pinned: {type: boolean}
+        version: {type: integer}
+      additionalProperties: true
+    ContentOperationsInput:
+      type: object
+      required: [version, clientId, changeId, operations]
+      properties:
+        version: {type: integer, minimum: 1, description: Base document version; recent stale versions are transformed instead of rejected.}
+        clientId: {type: string, maxLength: 128}
+        changeId: {type: string, maxLength: 128, description: Stable client-generated identifier used for deterministic merge order and retry deduplication.}
+        operations:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [type, index]
+            properties:
+              type: {type: string, enum: [insert, delete]}
+              index: {type: integer, minimum: 0}
+              text: {type: string, maxLength: 20000}
+              count: {type: integer, minimum: 1, maximum: 20000}
+    IntegrationLink:
+      type: object
+      required: [id, projectId, connectorId, externalId, title, version]
+      properties:
+        id: {type: string}
+        projectId: {type: string}
+        workItemId: {type: string}
+        connectorId: {type: string}
+        externalId: {type: string}
+        externalUrl: {type: string, format: uri}
+        title: {type: string}
+        version: {type: integer}
+      additionalProperties: true
+    ProviderResource:
+      type: object
+      required: [id, title, kind, linkType]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        path: {type: string}
+        kind: {type: string, enum: [file, folder, wiki, pull-request, merge-request]}
+        linkType: {type: string, enum: [development, file, folder, wiki]}
+        externalUrl: {type: string, format: uri}
+        metadata: {type: object, additionalProperties: true}
+    IntegrationResourceInput:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId: {type: string, maxLength: 128}
+        workItemId: {type: string, maxLength: 128}
+        title: {type: string, maxLength: 240}
+        content: {type: string, maxLength: 100000}
+        space: {type: string, maxLength: 240}
+        page: {type: string, maxLength: 240}
+        syntax: {type: string, maxLength: 64}
+    IntegrationPermissionSyncInput:
+      type: object
+      required: [projectId, resourceId]
+      properties:
+        projectId: {type: string, maxLength: 128}
+        resourceId: {type: string, maxLength: 1000}
+    ExternalShare:
+      type: object
+      required: [token, projectId, workItemId, targetType, target, permissions, expiresAt, version]
+      properties:
+        token: {type: string}
+        projectId: {type: string}
+        workItemId: {type: string}
+        targetType: {type: string, enum: [email, user, group]}
+        target: {type: string}
+        permissions: {type: array, items: {type: string, enum: [read, comment]}}
+        expiresAt: {type: string, format: date-time}
+        version: {type: integer}
+      additionalProperties: true
+    DirectorySyncInput:
+      type: object
+      required: [users]
+      properties:
+        source: {type: string, enum: [ldap, scim], default: ldap}
+        users:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [email]
+            properties:
+              externalId: {type: string}
+              email: {type: string, format: email}
+              name: {type: string}
+              role: {type: string}
+              status: {type: string, enum: [active, disabled]}
+              groupIds: {type: array, items: {type: string}}
+              department: {type: string, maxLength: 160}
+              customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+    LdapLoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, maxLength: 320}
+        password: {type: string, maxLength: 1024, writeOnly: true}
+    ExportPayload:
+      type: object
+      required: [format, filename, contentType]
+      properties:
+        format: {type: string}
+        filename: {type: string}
+        contentType: {type: string}
+        content: {type: string}
+        base64: {type: string, contentEncoding: base64}
+      additionalProperties: true
 paths:
+  /public/projects:
+    get:
+      summary: List explicitly published projects
+      description: Metadata-only directory from the public registration index. Current canonical registration and project eligibility are checked without loading tasks, memberships or private workspaces. At most ten initiatives are listed; truncation is explicit. Existing registrations enter the index when republished.
+      security: []
+      responses:
+        "200":
+          description: Published projects available for read-only browsing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [audience, readOnly, projects, truncated]
+                    properties:
+                      audience: {type: string, const: public}
+                      readOnly: {type: boolean, const: true}
+                      truncated: {type: boolean}
+                      projects:
+                        type: array
+                        maxItems: 100
+                        items:
+                          type: object
+                          additionalProperties: false
+                          required: [id, name, initiativeId]
+                          properties:
+                            id: {type: string}
+                            name: {type: string, maxLength: 240}
+                            initiativeId: {type: string}
+  /coordination:
+    get:
+      summary: Read bounded role, task, dependency, acceptance, and run state for accessible initiative projects.
+      parameters:
+        - {name: initiativeId, in: query, schema: {type: string}, description: Optional initiative filter; omitted returns all accessible coordinated projects.}
+      responses:
+        "200": {description: Authenticated coordination dashboard; summaries disclose truncation.}
+        "401": {description: Authentication required.}
+  /coordination/public-registration:
+    put:
+      summary: Register or revoke the exact community projects exposed by the public tracker.
+      description: Requires workspace and project administration. The current registration version and every selected project's workspace, initiative and community facet are checked. A community project label alone grants no public access.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [initiativeId, projectIds, enabled, version]
+              properties:
+                initiativeId: {type: string, maxLength: 128}
+                projectIds: {type: array, minItems: 1, maxItems: 10, uniqueItems: true, items: {type: string}}
+                enabled: {type: boolean}
+                version: {type: integer, minimum: 0}
+                parityBaseline:
+                  type: object
+                  additionalProperties: false
+                  required: [pass, partial, exclusion]
+                  properties:
+                    pass: {type: integer, minimum: 0, maximum: 1000}
+                    partial: {type: integer, minimum: 0, maximum: 1000}
+                    exclusion: {type: integer, minimum: 0, maximum: 1000}
+                    reference: {type: string, minLength: 1, maxLength: 160}
+      responses:
+        "200": {description: Updated versioned public registration.}
+        "403": {description: Workspace/project administration or owning workspace authority required.}
+        "409": {description: Registration version is stale.}
+  /public/coordination/{initiativeId}:
+    get:
+      tags: [Public tracker]
+      security: []
+      summary: Read current canonical work from explicitly registered community projects.
+      description: Server-owned registration fixes the workspace and community project set. Account and identity headers cannot broaden access. Private tasks, dependency identifiers, counts, source references, scopes and run metadata are omitted. All mutations and additional paths are denied. No demo store, reset or persisted public task copy participates.
+      parameters:
+        - name: initiativeId
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+      responses:
+        "200":
+          description: Read-only current community tracker; counts include only visible tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data: {$ref: "#/components/schemas/PublicCoordinationDashboard"}
+        "400": {description: Query/body overrides or bounded read limits rejected.}
+        "403": {description: Supported entry point required; public route is read-only.}
+        "404": {description: Registration unavailable, revoked, reclassified, or ambiguous task identifiers.}
+        "413": {description: Tracker exceeds the bounded response size.}
   /demo/bootstrap:
     get:
       tags: [Public demo]
@@ -439,7 +1015,20 @@ paths:
         "201": {description: Account}
   /me/profile:
     patch:
-      summary: Update the current user's Team Spaces profile and preferences.
+      summary: Update the current user's Team Spaces profile, preferences, and configured user fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                title: {type: string}
+                department: {type: string}
+                timezone: {type: string}
+                locale: {type: string}
+                customFields: {$ref: "#/components/schemas/CustomFieldValues"}
       responses:
         "200": {description: Profile and membership}
   /workspace:
@@ -451,6 +1040,25 @@ paths:
       summary: Update workspace settings.
       responses:
         "200": {description: Workspace}
+  /capabilities:
+    get:
+      summary: Return the workspace parity-capability policy document.
+      responses:
+        "200":
+          description: Workspace capabilities
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceCapabilities"}
+    patch:
+      summary: Replace workspace capabilities using optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceCapabilities"}
+      responses:
+        "200": {description: Updated workspace capabilities}
+        "409": {description: Version conflict}
   /work-configuration:
     get:
       summary: Return the workspace work-package types, statuses, defaults, and role-aware transitions.
@@ -480,17 +1088,27 @@ paths:
       responses:
         "200": {description: Membership list}
     post:
-      summary: Create or update a workspace membership.
+      summary: Create or update a workspace membership, including configured user fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MembershipInput"}
       responses:
         "201": {description: Membership}
   /memberships/{userId}:
     patch:
-      summary: Update a workspace member.
+      summary: Update a workspace member, including configured user fields.
       parameters:
         - name: userId
           in: path
           required: true
           schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MembershipInput"}
       responses:
         "200": {description: Membership}
   /portfolios:
@@ -531,25 +1149,24 @@ paths:
       responses:
         "201": {description: Created project}
   /projects/{projectId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: {type: string}
     get:
       summary: Fetch one project.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: {type: string}
       responses:
         "200": {description: Project}
     patch:
       summary: Update a project with optimistic concurrency.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: {type: string}
       responses:
         "200": {description: Project}
         "409": {description: Version conflict}
+    delete:
+      summary: Delete a project after its tasks and subprojects have been removed.
+      responses:
+        "200": {description: Deletion result}
   /projects/{projectId}/work-items:
     parameters:
       - name: projectId
@@ -599,20 +1216,24 @@ paths:
       responses:
         "201": {description: Created task}
   /projects/{projectId}/work-items/{workItemId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: {type: string}
+      - name: workItemId
+        in: path
+        required: true
+        schema: {type: string}
     patch:
       summary: Update a project task with conditional optimistic concurrency.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: {type: string}
-        - name: workItemId
-          in: path
-          required: true
-          schema: {type: string}
       responses:
         "200": {description: Task}
         "409": {description: Version conflict}
+    delete:
+      summary: Delete an unreferenced task with optimistic concurrency.
+      responses:
+        "200": {description: Deletion result}
   /planning:
     get:
       summary: Return cross-project planning board data and period, intake, workload, and milestone summary.
@@ -659,11 +1280,11 @@ paths:
         "400": {description: Invalid filter, sort prerequisite, limit, date range, or cursor}
   /meetings:
     get:
-      summary: List one project's meetings in chronological order using a query-bound keyset cursor.
+      summary: List meetings globally or for one project in chronological order using a query-bound keyset cursor.
       parameters:
         - name: projectId
           in: query
-          required: true
+          required: false
           schema: {type: string, minLength: 1, maxLength: 128}
         - name: limit
           in: query
@@ -741,13 +1362,22 @@ paths:
         "403": {description: Meeting management permission required}
         "404": {description: Project or meeting not found in the caller's scope}
         "409": {description: Meeting version conflict}
+    delete:
+      summary: Delete a meeting with optimistic concurrency.
+      responses:
+        "200": {description: Deletion result}
   /time-entries:
     get:
       summary: List time entries.
       responses:
         "200": {description: Time entries}
     post:
-      summary: Create a time entry.
+      summary: Create a time entry with an active configured activity and typed time-entry fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TimeEntryInput"}
       responses:
         "201": {description: Time entry}
   /activity:
@@ -818,11 +1448,11 @@ paths:
         "200": {description: Document}
   /saved-views:
     get:
-      summary: List private saved views.
+      summary: List the caller's private and workspace-shared saved views.
       responses:
         "200": {description: Saved views}
     post:
-      summary: Save a private view.
+      summary: Save a private or workspace-shared view.
       responses:
         "201": {description: Saved view}
   /reports/portfolio-summary:
@@ -879,3 +1509,740 @@ paths:
           schema: {type: string}
       responses:
         "200": {description: Download URL}
+  /mcp:
+    post:
+      summary: Execute an authorized JSON-RPC 2.0 Model Context Protocol request.
+      description: Supports initialize, tools/list, and tools/call; workspace MCP policy controls read-only mode and the tool allowlist.
+      responses:
+        "200": {description: JSON-RPC response}
+        "403": {description: MCP is disabled or the requested tool is not authorized}
+  /integrations:
+    get:
+      summary: Return maintained connector, repository, and link status for GitHub, GitLab, Nextcloud, OneDrive, SharePoint, XWiki, openDesk, Jira, Git, SVN, and generic providers.
+      responses:
+        "200": {description: Integration catalog}
+  /integration-links:
+    get:
+      summary: List external development and file links, optionally by project, task, or connector.
+      responses:
+        "200": {description: Integration link list}
+    post:
+      summary: Link an external development, storage, or collaboration record to a project or task.
+      responses:
+        "201":
+          description: Created link
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/IntegrationLink"}
+  /integration-links/{linkId}:
+    delete:
+      summary: Remove an integration link with optimistic concurrency.
+      parameters:
+        - {name: linkId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Deletion result}
+  /integrations/{connectorId}/events:
+    post:
+      summary: Ingest a maintained connector event and attach it to the matching linked task.
+      parameters:
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: Integration event}
+  /integrations/{connectorId}/health:
+    post:
+      summary: Authenticate to the configured provider and run its bounded health check.
+      parameters:
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Authenticated provider health result}
+        "400": {description: Adapter is unsupported or incomplete}
+        "503": {description: Provider authentication or request failed}
+  /integrations/{connectorId}/resources:
+    get:
+      summary: Browse provider-side pull requests, merge requests, files, folders, or wiki pages.
+      parameters:
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string, maxLength: 1000}}
+        - {name: query, in: query, schema: {type: string, maxLength: 240}}
+        - {name: cursor, in: query, schema: {type: string, maxLength: 500}}
+      responses:
+        "200":
+          description: Bounded provider resource page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, maxItems: 100, items: {$ref: "#/components/schemas/ProviderResource"}}
+                  nextCursor: {type: string}
+    post:
+      summary: Create an XWiki page and link it to a project or task.
+      parameters:
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/IntegrationResourceInput"}
+      responses:
+        "201": {description: Created provider resource and Team Spaces link}
+  /integrations/{connectorId}/permissions/sync:
+    post:
+      summary: Reconcile active project membership with explicitly managed provider folder permissions.
+      parameters:
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/IntegrationPermissionSyncInput"}
+      responses:
+        "200": {description: Added and removed provider principals}
+  /provider-webhooks/{workspaceId}/{connectorId}:
+    post:
+      security: []
+      summary: Receive a replay-protected GitHub, GitLab, XWiki, Nextcloud, or openDesk event after provider signature verification.
+      parameters:
+        - {name: workspaceId, in: path, required: true, schema: {type: string}}
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      responses:
+        "202": {description: Accepted, normalized, linked, and recorded provider event}
+        "401": {description: Webhook signature or shared token is invalid}
+  /provider-api/{workspaceId}/{connectorId}/work-items:
+    get:
+      security: []
+      summary: Let an authenticated XWiki, Nextcloud, or openDesk adapter search a bounded project work-item set.
+      parameters:
+        - {name: workspaceId, in: path, required: true, schema: {type: string}}
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+        - {name: projectId, in: query, required: true, schema: {type: string}}
+        - {name: query, in: query, schema: {type: string, maxLength: 240}}
+      responses:
+        "200": {description: At most 100 matching work items}
+        "401": {description: External provider credential is invalid}
+    post:
+      security: []
+      summary: Let an authenticated XWiki, Nextcloud, or openDesk adapter create a work item in an explicitly allowed project.
+      parameters:
+        - {name: workspaceId, in: path, required: true, schema: {type: string}}
+        - {name: connectorId, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: Created work item}
+        "401": {description: External provider credential is invalid}
+  /integrations/jira/import:
+    post:
+      summary: Import a bounded Jira issue batch into configured Team Spaces work types and statuses.
+      responses:
+        "201": {description: Imported work items, links, and per-record results}
+  /repositories:
+    get:
+      summary: List configured on-premises Git and SVN repository mirrors.
+      responses:
+        "200": {description: Repository list}
+  /repositories/{repositoryId}/tree:
+    get:
+      summary: Browse a synchronized Git or SVN tree by path and ref without exposing repository credentials.
+      parameters:
+        - {name: repositoryId, in: path, required: true, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string, maxLength: 1000}}
+        - {name: ref, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Repository tree}
+  /repositories/{repositoryId}/sync:
+    post:
+      summary: Replace the bounded mirrored tree snapshot for a configured Git or SVN repository.
+      parameters:
+        - {name: repositoryId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Repository snapshot metadata}
+  /external-shares:
+    get:
+      summary: List task shares created for external users, emails, or groups.
+      responses:
+        "200": {description: External share list}
+    post:
+      summary: Create a recipient-limited, expiring task share with read or comment permission.
+      responses:
+        "201":
+          description: External share
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExternalShare"}
+  /external-shares/{token}:
+    delete:
+      summary: Revoke an external task share.
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Revocation result}
+  /shared-work/{token}:
+    get:
+      summary: Return a task and external-safe conversation only when the authenticated identity matches the share recipient.
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Shared task}
+        "404": {description: Share is absent, expired, revoked, or belongs to another recipient}
+  /shared-work/{token}/comments:
+    post:
+      summary: Add an external-visible comment when the share grants comment permission.
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: External comment}
+  /outbound-links/check:
+    post:
+      summary: Apply allow, warn, capture, or block policy before navigating to an HTTPS link.
+      responses:
+        "200": {description: Navigation decision}
+  /outbound-links/events:
+    get:
+      summary: List captured outbound-link decisions for administrators.
+      responses:
+        "200": {description: Navigation event list}
+  /directory/sync:
+    post:
+      summary: Synchronize a bounded LDAP or SCIM user/group batch into memberships.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DirectorySyncInput"}
+      responses:
+        "200": {description: Directory synchronization result}
+  /directory/ldap/sync:
+    post:
+      summary: Connect over certificate-verified LDAPS, query configured users/groups, map departments, and disable disappeared directory users.
+      responses:
+        "200": {description: LDAP query and synchronization result}
+        "403": {description: LDAP synchronization is disabled}
+        "503": {description: LDAPS connection, bind, or query failed}
+  /ldap-auth/{workspaceId}:
+    post:
+      security: []
+      summary: Authenticate with a service lookup and user LDAPS bind, then issue a short-lived workspace-bound Team Spaces session.
+      parameters:
+        - {name: workspaceId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LdapLoginInput"}
+      responses:
+        "201": {description: Short-lived LDAP session and synchronized member}
+        "401": {description: Directory credentials were rejected}
+  /scim/v2/Users:
+    parameters:
+      - {name: X-TeamSpaces-Account-Id, in: header, required: true, schema: {type: string}}
+    get:
+      summary: List SCIM 2.0 users using the workspace's hashed service credential.
+      parameters:
+        - {name: filter, in: query, schema: {type: string}}
+        - {name: startIndex, in: query, schema: {type: integer, minimum: 1}}
+        - {name: count, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+      responses:
+        "200": {description: SCIM ListResponse}
+    post:
+      summary: Provision a SCIM 2.0 user.
+      responses:
+        "201": {description: SCIM User}
+  /scim/v2/Users/{userId}:
+    parameters:
+      - {name: userId, in: path, required: true, schema: {type: string}}
+      - {name: X-TeamSpaces-Account-Id, in: header, required: true, schema: {type: string}}
+    get:
+      summary: Fetch a SCIM user.
+      responses:
+        "200": {description: SCIM User}
+    put:
+      summary: Replace a SCIM user.
+      responses:
+        "200": {description: SCIM User}
+    patch:
+      summary: Apply SCIM active, displayName, or role operations.
+      responses:
+        "200": {description: SCIM User}
+    delete:
+      summary: Disable a SCIM user.
+      responses:
+        "204": {description: User disabled}
+  /scim/v2/Groups:
+    parameters:
+      - {name: X-TeamSpaces-Account-Id, in: header, required: true, schema: {type: string}}
+    get:
+      summary: List and filter SCIM 2.0 groups with current user membership.
+      parameters:
+        - {name: filter, in: query, schema: {type: string}}
+        - {name: startIndex, in: query, schema: {type: integer, minimum: 1}}
+        - {name: count, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+      responses:
+        "200": {description: SCIM ListResponse}
+    post:
+      summary: Provision a SCIM 2.0 group and synchronize up to 90 members.
+      responses:
+        "201": {description: SCIM Group}
+  /scim/v2/Groups/{groupId}:
+    parameters:
+      - {name: groupId, in: path, required: true, schema: {type: string}}
+      - {name: X-TeamSpaces-Account-Id, in: header, required: true, schema: {type: string}}
+    get:
+      summary: Fetch a SCIM group with current membership.
+      responses:
+        "200": {description: SCIM Group}
+    put:
+      summary: Replace a SCIM group and its membership.
+      responses:
+        "200": {description: SCIM Group}
+    patch:
+      summary: Add, remove, or replace SCIM group attributes and members.
+      responses:
+        "200": {description: SCIM Group}
+    delete:
+      summary: Delete a SCIM group and remove it from every member.
+      responses:
+        "204": {description: Group deleted}
+  /webhooks/{webhookId}/deliver:
+    post:
+      summary: Deliver a configured HTTPS webhook event and persist its outcome.
+      parameters:
+        - {name: webhookId, in: path, required: true, schema: {type: string}}
+      responses:
+        "202": {description: Webhook delivery}
+  /webhook-deliveries:
+    get:
+      summary: List recent webhook delivery outcomes.
+      responses:
+        "200": {description: Delivery list}
+  /placeholders:
+    get:
+      summary: List placeholder users used for capacity and allocation planning.
+      responses:
+        "200": {description: Placeholder membership list}
+    post:
+      summary: Create a placeholder with weekly capacity, skills, and project scope.
+      responses:
+        "201": {description: Placeholder membership}
+  /projects/{projectId}/copy:
+    post:
+      summary: Copy a project's settings and optionally its tasks, or create a reusable template.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: Copied project}
+  /projects/{projectId}/archive:
+    post:
+      summary: Archive a project.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Archived project}
+  /projects/{projectId}/restore:
+    post:
+      summary: Restore an archived project.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Restored project}
+  /projects/{projectId}/initiation/submit:
+    post:
+      summary: Submit a configured project-initiation request and apply its template artifact.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Submitted initiation request}
+  /projects/{projectId}/initiation/review:
+    post:
+      summary: Approve, reject, or request changes to a project-initiation request with audit evidence.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Reviewed project}
+  /projects/{projectId}/lifecycle-gates/{gateId}/approve:
+    post:
+      summary: Approve a configured lifecycle gate before its destination phase becomes available.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+        - {name: gateId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Approved project gate}
+  /projects/{projectId}/work-items/{workItemId}/copy:
+    post:
+      summary: Duplicate a task in this or another accessible project.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+        - {name: workItemId, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: Copied task}
+  /projects/{projectId}/work-items/{workItemId}/move:
+    post:
+      summary: Move a task to another project and clear project-local relationships.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+        - {name: workItemId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Moved task}
+  /projects/{projectId}/work-items/{workItemId}/actions/{actionId}:
+    post:
+      summary: Execute a role-limited configured one-click action.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+        - {name: workItemId, in: path, required: true, schema: {type: string}}
+        - {name: actionId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Updated task}
+  /work-items/assigned:
+    get:
+      summary: List the current user's assigned tasks.
+      responses:
+        "200": {description: Assigned task list}
+  /projects/{projectId}/schedule:
+    post:
+      summary: Recalculate automatic tasks using typed dependencies, hierarchy, milestones, and the project work calendar.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Scheduling result}
+  /projects/{projectId}/baseline-comparison:
+    get:
+      summary: Compare project task state between any two retained historical dates.
+      parameters:
+        - {name: projectId, in: path, required: true, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+      responses:
+        "200": {description: Historical task comparison and snapshot-coverage status}
+  /planning-resources:
+    get:
+      summary: List versions, sprints, baselines, work calendars, or persistent boards.
+      responses:
+        "200": {description: Planning resource list}
+    post:
+      summary: Create a version with configured version fields, sprint, baseline snapshot, work calendar, or persistent board.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlanningResourceInput"}
+      responses:
+        "201":
+          description: Planning resource
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlanningResource"}
+  /planning-resources/{resourceId}:
+    parameters:
+      - {name: resourceId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Fetch a planning resource in its required project scope.
+      responses:
+        "200": {description: Planning resource}
+    patch:
+      summary: Update a planning resource, including configured version fields, with optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: {type: integer, minimum: 1}
+                customFields: {$ref: "#/components/schemas/CustomFieldValues"}
+              additionalProperties: true
+      responses:
+        "200": {description: Updated planning resource}
+    delete:
+      summary: Delete a planning resource with optimistic concurrency.
+      responses:
+        "200": {description: Deletion result}
+  /planning-resources/{resourceId}/baseline-comparison:
+    get:
+      summary: Compare current project work with the selected immutable baseline.
+      parameters:
+        - {name: resourceId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Baseline comparison}
+  /planning-resources/{resourceId}/burndown:
+    get:
+      summary: Return ideal and actual sprint burndown series.
+      parameters:
+        - {name: resourceId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Sprint burndown}
+  /meetings/{meetingId}/copy:
+    post:
+      summary: Copy a meeting or save it as a reusable template.
+      parameters:
+        - {name: meetingId, in: path, required: true, schema: {type: string}}
+      responses:
+        "201": {description: Copied meeting}
+  /meetings/{meetingId}/attendance:
+    post:
+      summary: Record the current participant's invitation or attendance response.
+      parameters:
+        - {name: meetingId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Updated meeting}
+  /meetings/{meetingId}/calendar:
+    get:
+      summary: Export a one-time or recurring meeting as iCalendar.
+      parameters:
+        - {name: meetingId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: iCalendar export}
+  /meetings/{meetingId}/pdf:
+    get:
+      summary: Export branded agenda, minutes, and outcomes as PDF.
+      parameters:
+        - {name: meetingId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: PDF export
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExportPayload"}
+  /time-entries/{timeEntryId}:
+    parameters:
+      - {name: timeEntryId, in: path, required: true, schema: {type: string}}
+    patch:
+      summary: Edit a time record, its activity, and configured fields using its original date and optimistic version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TimeEntryPatchInput"}
+      responses:
+        "200": {description: Time entry}
+    delete:
+      summary: Delete a time record using its original date and optimistic version.
+      responses:
+        "200": {description: Deletion result}
+  /timer:
+    get:
+      summary: Return the current user's cross-device persistent timer.
+      responses:
+        "200": {description: Timer state}
+  /timer/start:
+    post:
+      summary: Start a project or task timer with an activity and configured time-entry fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TimerStartInput"}
+      responses:
+        "201": {description: Active timer}
+  /timer/stop:
+    post:
+      summary: Stop the active timer and create its time entry.
+      responses:
+        "200": {description: Timer and time entry}
+  /notifications:
+    get:
+      summary: List grouped assignment, participation, mention, and reminder notifications with persistent read state.
+      parameters:
+        - {name: filter, in: query, schema: {type: string, enum: [all, unread, read], default: all}}
+        - {name: projectId, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Notification events, entity groups, and read/unread counts}
+  /notification-preferences:
+    get:
+      summary: Return the current user's global and per-project participation, date-alert, and scheduled-summary preferences.
+      responses:
+        "200": {description: Versioned notification preferences}
+    patch:
+      summary: Replace the current user's notification preferences using optimistic versioning.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationPreferences"}
+      responses:
+        "200": {description: Updated notification preferences}
+        "400": {description: Invalid project, schedule, rule, or delivery gateway}
+        "409": {description: Stale preference version}
+  /notifications/read:
+    post:
+      summary: Mark up to 100 accessible notification events read or unread.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {type: string}}
+                read: {type: boolean, default: true}
+      responses:
+        "200": {description: Read-state mutation result}
+  /notifications/read-all:
+    post:
+      summary: Mark every currently accessible notification event read.
+      responses:
+        "200": {description: Read-state mutation result}
+  /notifications/digest:
+    get:
+      summary: Build the current user's daily or weekly participation and date-alert digest.
+      responses:
+        "200": {description: Notification digest}
+  /notifications/digest/deliver:
+    post:
+      summary: Deliver the digest through a configured email/webhook gateway and persist the result.
+      responses:
+        "202": {description: Digest and delivery result}
+  /search:
+    get:
+      summary: Search projects, tasks, meetings, project content, document metadata, and scanner-indexed attachment text.
+      parameters:
+        - {name: q, in: query, schema: {type: string, maxLength: 200}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        "200": {description: Search results}
+  /exports/work-items:
+    get:
+      summary: Export a project or workspace task list as CSV, SpreadsheetML XLS, PDF, or Atom.
+      parameters:
+        - {name: projectId, in: query, schema: {type: string}}
+        - {name: format, in: query, schema: {type: string, enum: [csv, xls, pdf, atom]}}
+      responses:
+        "200":
+          description: Work-item export
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExportPayload"}
+  /exports/gantt:
+    get:
+      summary: Export a project's scheduled Gantt rows as a branded PDF.
+      parameters:
+        - {name: projectId, in: query, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Gantt PDF
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExportPayload"}
+  /project-content:
+    get:
+      summary: List and full-text filter hierarchical wiki pages, collaborative documents, news, and forum topics.
+      responses:
+        "200": {description: Project content list}
+    post:
+      summary: Create versioned project content.
+      responses:
+        "201":
+          description: Project content
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProjectContent"}
+  /project-content/{contentId}:
+    parameters:
+      - {name: contentId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Fetch project content in its required project scope.
+      responses:
+        "200": {description: Project content}
+    patch:
+      summary: Save a metadata or body revision with optimistic concurrency.
+      responses:
+        "200": {description: Updated project content}
+    delete:
+      summary: Delete childless project content while retaining immutable audit history.
+      responses:
+        "200": {description: Deletion result}
+  /project-content/{contentId}/revisions:
+    get:
+      summary: List immutable project-content revisions newest first.
+      parameters:
+        - {name: contentId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Revision list}
+  /project-content/{contentId}/operations:
+    post:
+      summary: Apply bounded insert/delete operations and create an immutable collaborative revision.
+      parameters:
+        - {name: contentId, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ContentOperationsInput"}
+      responses:
+        "200": {description: Updated project content}
+        "409": {description: Merge history expired or the document advanced repeatedly during the conditional commit; retry the same change or refresh}
+  /project-content/{contentId}/presence:
+    parameters:
+      - {name: contentId, in: path, required: true, schema: {type: string}}
+    get:
+      summary: List active editor cursors with a two-minute lease.
+      responses:
+        "200": {description: Active editor list}
+    post:
+      summary: Refresh the current editor's cursor and selection lease.
+      responses:
+        "200": {description: Editor presence}
+  /documents/{documentId}/scan:
+    post:
+      summary: Record scanner verdict and bounded extracted text before quarantine promotion.
+      parameters:
+        - {name: documentId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Scanned document metadata}
+  /documents/{documentId}/scan-request:
+    post:
+      summary: Verify an uploaded quarantined object, persist queued state, and dispatch a short-lived scanner job through the configured webhook.
+      parameters:
+        - {name: documentId, in: path, required: true, schema: {type: string}}
+        - {name: projectId, in: query, required: true, schema: {type: string}}
+      responses:
+        "202": {description: Scanner job and public pending-document state}
+  /reports/costs:
+    get:
+      summary: Run the full or a reusable configured rate, unit-cost, budget, and variance report.
+      parameters:
+        - {name: definitionId, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Cost and budget report}
+  /reports/resources:
+    get:
+      summary: Return a dated weekly resource plan with skills, time off, net capacity, project allocation, task effort, availability, and over-allocation.
+      parameters:
+        - {name: week, in: query, schema: {type: string, format: date}}
+        - {name: projectId, in: query, schema: {type: string}}
+        - {name: skill, in: query, schema: {type: string, maxLength: 100}}
+      responses:
+        "200": {description: Resource capacity plan}
+  /resource-planner/profiles:
+    post:
+      summary: Create or replace a member's versioned weekly capacity and skills profile.
+      responses:
+        "200": {description: Updated workspace capabilities}
+  /resource-planner/allocations:
+    post:
+      summary: Create or replace a dated project staffing allocation.
+      responses:
+        "200": {description: Updated workspace capabilities}
+  /resource-planner/allocations/{allocationId}:
+    delete:
+      summary: Delete a project staffing allocation using the capability version.
+      parameters:
+        - {name: allocationId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Updated workspace capabilities}
+  /resource-planner/time-off:
+    post:
+      summary: Create or replace dated member time off that reduces net capacity.
+      responses:
+        "200": {description: Updated workspace capabilities}
+  /resource-planner/time-off/{timeOffId}:
+    delete:
+      summary: Delete time off using the capability version.
+      parameters:
+        - {name: timeOffId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Updated workspace capabilities}
+  /security/badge:
+    get:
+      summary: Return the installation's MFA, alerting, scan, quarantine, outbound-link, and SCIM security checks.
+      responses:
+        "200": {description: Installation security badge}

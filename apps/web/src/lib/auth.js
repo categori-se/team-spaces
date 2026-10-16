@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 const tokenStorageKey = "teamspaces.session";
+const accountStorageKey = "teamspaces.accountId";
 const verifierStorageKey = "teamspaces.pkce.verifier";
 const stateStorageKey = "teamspaces.oauth.state";
 const publicDemoStorageKey = "teamspaces.public-demo";
@@ -23,11 +24,13 @@ export async function runtimeConfig() {
       .then((config) => {
         return {
           apiBaseUrl: config.apiBaseUrl ?? (isLocal ? "http://localhost:8787/api/v1" : "/api/v1"),
-          authMode: config.authMode ?? (isLocal ? "demo" : "cognito"),
+          authMode: config.authMode === "local" && !isLocal ? "cognito" : config.authMode ?? (isLocal ? "demo" : "cognito"),
+          localAuth: {enabled: isLocal && config.authMode === "local"},
           appOrigin: config.appOrigin ?? location.origin,
           cognito: config.cognito ?? {},
+          ldap: {enabled: config.ldap?.enabled === true, workspaceId: config.ldap?.workspaceId ?? "", label: config.ldap?.label ?? "Organization directory"},
           publicDemo: {
-            enabled: config.publicDemo?.enabled === true,
+            enabled: config.authMode !== "local" && config.publicDemo?.enabled === true,
             apiBaseUrl: config.publicDemo?.apiBaseUrl ?? "/api/v1/demo",
             origin: config.publicDemo?.origin ?? "",
             resetsAt: config.publicDemo?.resetsAt ?? ""
@@ -159,16 +162,26 @@ export async function currentSession() {
     };
   }
   if (isPublicDemoActive()) clearPublicDemoMode();
+  const defaultMode = config.localAuth.enabled ? "local" : "cognito";
   const raw = sessionStorage.getItem(tokenStorageKey);
-  if (!raw) return {authenticated: false, mode: "cognito"};
-  const session = JSON.parse(raw);
-  if (session.expiresAt && Date.now() < session.expiresAt - 60_000) {
-    return {authenticated: true, mode: "cognito", ...session};
+  if (!raw) return {authenticated: false, mode: defaultMode};
+  let session;
+  try {
+    session = JSON.parse(raw);
+  } catch {
+    sessionStorage.removeItem(tokenStorageKey);
+    return {authenticated: false, mode: defaultMode};
   }
-  if (session.refreshToken) {
+  if ((config.localAuth.enabled && session?.mode !== "local") || (!config.localAuth.enabled && session?.mode === "local")) {
+    return {authenticated: false, mode: defaultMode};
+  }
+  if (session?.accessToken && session.expiresAt && Date.now() < session.expiresAt - 60_000) {
+    return {authenticated: true, mode: session.mode ?? "cognito", ...session};
+  }
+  if (session?.mode !== "ldap" && session?.mode !== "local" && session?.refreshToken) {
     return refreshSession(session.refreshToken);
   }
-  return {authenticated: false, mode: "cognito"};
+  return {authenticated: false, mode: defaultMode};
 }
 
 export async function getAccessToken() {
@@ -183,6 +196,10 @@ export async function beginSignIn() {
     sessionStorage.removeItem(verifierStorageKey);
     sessionStorage.removeItem(stateStorageKey);
     location.href = configuredAppOrigin(config);
+    return;
+  }
+  if (config.localAuth.enabled) {
+    location.href = "/local-login";
     return;
   }
   if (config.authMode === "demo") {
@@ -204,6 +221,43 @@ export async function beginSignIn() {
     state
   });
   location.href = `${config.cognito.domain}/oauth2/authorize?${params}`;
+}
+
+export async function localSignIn(key) {
+  clearPublicDemoMode();
+  const config = await runtimeConfig();
+  if (!config.localAuth.enabled) throw new Error("Local workspace sign in is not enabled");
+  if (!String(key ?? "").trim()) throw new Error("Enter the local access key");
+  const response = await fetch(`${config.apiBaseUrl}/local/session`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({key: String(key).trim()}),
+    credentials: "omit",
+    cache: "no-store"
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(response.status === 401 ? "The local access key was not accepted" : "Local workspace sign in is unavailable");
+  const token = payload.data ?? payload;
+  saveToken(token, "local", token.workspaceId ?? "");
+  try {
+    if (token.workspaceId) localStorage.setItem(accountStorageKey, token.workspaceId);
+    else localStorage.removeItem(accountStorageKey);
+  } catch {
+    // The local API falls back to the authenticated workspace when storage is unavailable.
+  }
+  location.href = "/app/projects";
+}
+
+export async function ldapSignIn(username, password) {
+  clearPublicDemoMode();
+  const config = await runtimeConfig();
+  if (!config.ldap?.enabled || !config.ldap.workspaceId) throw new Error("LDAP sign in is not enabled");
+  const response = await fetch(`${config.apiBaseUrl}/ldap-auth/${encodeURIComponent(config.ldap.workspaceId)}`, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({username, password}), cache: "no-store"});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(response.status === 401 ? "The directory credentials were not accepted" : payload.detail ?? "Directory sign in is unavailable");
+  const token = payload.data ?? payload;
+  saveToken(token, "ldap", config.ldap.workspaceId);
+  location.href = "/app";
 }
 
 export function handleAuthCallback() {
@@ -238,7 +292,7 @@ async function exchangeAuthCallback() {
     clearAuthCallbackUrl();
     return;
   }
-  if (!code || config.authMode === "demo") return;
+  if (!code || config.authMode === "demo" || config.localAuth.enabled) return;
   if (hasUsableStoredSession()) {
     clearAuthCallbackUrl();
     return;
@@ -316,9 +370,11 @@ async function refreshSession(refreshToken) {
   return currentSession();
 }
 
-function saveToken(token) {
-  if (!token?.access_token || !token?.id_token) throw new Error("Invalid Cognito token response");
+function saveToken(token, mode = "cognito", workspaceId = "") {
+  if (!token?.access_token || !token?.id_token) throw new Error(`Invalid ${mode === "cognito" ? "Cognito" : mode === "local" ? "local" : "LDAP"} token response`);
   sessionStorage.setItem(tokenStorageKey, JSON.stringify({
+    mode,
+    workspaceId,
     accessToken: token.access_token,
     idToken: token.id_token,
     refreshToken: token.refresh_token,
@@ -328,6 +384,7 @@ function saveToken(token) {
 
 export async function signOut() {
   const config = await runtimeConfig();
+  const session = await currentSession().catch(() => undefined);
   if (isPublicDemoActive() || isIsolatedPublicDemoOrigin(config)) {
     await exitPublicDemo();
     return;
@@ -335,6 +392,17 @@ export async function signOut() {
   sessionStorage.removeItem(tokenStorageKey);
   sessionStorage.removeItem(verifierStorageKey);
   sessionStorage.removeItem(stateStorageKey);
+  if (config.localAuth.enabled || session?.mode === "local") {
+    try {
+      localStorage.removeItem(accountStorageKey);
+    } catch {
+      // Sign out still clears the authenticated session when browser storage is unavailable.
+    }
+  }
+  if (session?.mode === "ldap" || session?.mode === "local") {
+    location.href = "/";
+    return;
+  }
   if (config.authMode === "demo" || !config.cognito.domain) {
     location.href = "/";
     return;

@@ -500,8 +500,15 @@ const readRoutes = [
   /^\/time-entries$/,
   /^\/activity$/,
   /^\/documents$/,
+  /^\/project-content(?:\/[^/]+(?:\/(?:revisions|presence))?)?$/,
+  /^\/search$/,
+  /^\/notifications(?:\/digest)?$/,
+  /^\/integrations$/,
+  /^\/integration-links$/,
+  /^\/repositories(?:\/[^/]+\/tree)?$/,
   /^\/saved-views$/,
-  /^\/reports\/(?:portfolio-summary|planning-summary|project-timeline)$/,
+  /^\/reports\/(?:portfolio-summary|planning-summary|project-timeline|costs|resources)$/,
+  /^\/security\/badge$/,
   /^\/application-data\/summary$/
 ];
 
@@ -574,10 +581,10 @@ export function publicDemoMetadata(active, now = new Date()) {
     editable: true,
     resetAt: active.resetAt,
     nextResetAt: active.nextResetAt ?? nextPublicDemoResetAt(now, resetHour),
-    resetSchedule: "daily",
+    resetSchedule: process.env.PUBLIC_DEMO_RESET_FUNCTION_NAME ? "on-access-after-deadline" : "daily",
     seedVersion: active.seedVersion,
     mutationLimit: Number(process.env.PUBLIC_DEMO_MUTATION_LIMIT ?? publicDemoMutationLimit),
-    notice: "Changes are shared with other visitors and reset daily. Editing may pause if the shared daily request limit is reached. Do not enter sensitive information."
+    notice: "Changes are shared with other visitors. After the reset deadline, the next demo visit refreshes the sample before editing. Do not enter sensitive information."
   };
 }
 

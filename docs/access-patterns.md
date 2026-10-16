@@ -15,18 +15,33 @@ Authenticated Team Spaces data uses one protected on-demand DynamoDB table with 
 | --- | --- | --- | --- |
 | Workspace/account | `WORKSPACE#<workspaceId>` | `META` | Account metadata; `accountType` is personal, team, or client |
 | Work configuration | `WORKSPACE#<workspaceId>` | `WORK_CONFIGURATION` | Versioned task types, statuses, defaults, and role-scoped status transitions; absent records use the code-defined v1 default |
-| Membership | `WORKSPACE#<workspaceId>` | `MEMBER#<userId>` | Role, status, profile, optional `projectIds` restriction |
+| Workspace capabilities | `WORKSPACE#<workspaceId>` | `CAPABILITIES` | Versioned lifecycle, entity-aware field definitions, enumeration values, forms/actions, finance/resources, identity, branding, notifications, integrations, sharing, security, SCIM, MCP, and work settings |
+| Membership | `WORKSPACE#<workspaceId>` | `MEMBER#<userId>` | Role, status, profile, user custom fields, optional `projectIds` restriction, and directory source/external identity/department mapping |
 | User account index | `USER#<userId>` | `ACCOUNT#<workspaceId>` | Account switcher lookup for current user |
 | Portfolio | `WORKSPACE#<workspaceId>` | `PORTFOLIO#<portfolioId>` | Archive flag, name |
 | Project | `PROJECT#<projectId>` | `META` | Project metadata |
 | Project-to-portfolio projection | `WORKSPACE#<workspaceId>` | `PROJECT_PORTFOLIO#<portfolioId>#PROJECT#<projectId>` | Transactional duplicate used only for the portfolio project GSI |
 | Task | `PROJECT#<projectId>` | `WORK#<workItemId>` | Task, milestone, risk, or issue; Work Query v1 also projects the canonical row into the workspace work GSI |
-| Meeting | `PROJECT#<projectId>` | `MEETING#<meetingId>` | One-time meeting with bounded participants and embedded flat agenda; GSI1 orders the canonical row by normalized start time |
+| Meeting | `PROJECT#<projectId>` | `MEETING#<meetingId>` | One-time or recurring/template meeting with bounded participants, agenda, attendance, attachment IDs, minutes, and outcomes; project/global sparse indexes order normalized start time |
+| Project content | `PROJECT#<projectId>` | `CONTENT#<contentId>` | Wiki/document/news/forum canonical record; GSI1 supplies bounded workspace search |
+| Content revision | `CONTENT#<contentId>` | `REVISION#<zero-paddedVersion>` | Immutable body/status revision plus canonical text operation/change key when produced by the collaborative editor |
+| Content presence | `PROJECT#<projectId>` | `CONTENT_SESSION#<contentId>#<userId>#<clientId>` | Short TTL editor lease, never authoritative content |
+| Planning resource | `PROJECT#<projectId>` | `PLANNING#<resourceId>` | Version (including custom fields), sprint, baseline snapshot, work calendar, or saved board; GSI1 groups workspace resources by kind |
 | Activity | `PROJECT#<projectId>` | `ACTIVITY#<reverseTimestamp>#<activityId>` | Append-only mutation history |
+| Notification read marker | `WORKSPACE#<workspaceId>#USER#<userId>` | `NOTIFICATION_READ#<activityId>` | Per-user read state with 180-day TTL |
+| Notification preferences | `WORKSPACE#<workspaceId>#USER#<userId>` | `NOTIFICATION_PREFERENCES` | Versioned global/project participation and scheduled-summary settings; active schedules project to GSI2 by UTC hour |
+| Notification digest claim | `WORKSPACE#<workspaceId>#USER#<userId>` | `NOTIFICATION_DIGEST#<frequency>#<date>` | Conditional per-period delivery claim with 90-day TTL |
 | Meeting create claim | `WORKSPACE#<workspaceId>` | `IDEMPOTENCY#MEETING_CREATE#<sha256>` | Optional caller-key replay record scoped to workspace, actor, and operation; stores only hashes and the original result, and becomes TTL-cleanup eligible after 24 hours |
 | Document | `PROJECT#<projectId>` | `DOCUMENT#<documentId>` | Metadata only; optional `workItemId`; object bytes live in private S3 |
-| Time entry | `USER#<userId>` | `TIME#<date>#<timeEntryId>` | User/date timesheet |
+| Time entry | `USER#<userId>` | `TIME#<date>#<timeEntryId>` | User/date timesheet with configured activity and time-entry custom fields |
+| Active timer | `USER#<userId>` | `TIMER#<workspaceId>` | At most one conditional cross-device timer per user/workspace; retains activity/custom-field values until transactional stop |
 | Saved view | `USER#<userId>` | `SAVED_VIEW#<viewId>` | Private view |
+| Integration link | `WORKSPACE#<workspaceId>` | `INTEGRATION#<linkId>` | Project/task-scoped provider record link; credentials remain references in capabilities |
+| Provider delivery claim | `WORKSPACE#<workspaceId>` | `PROVIDER_DELIVERY#<connectorId>#<deliveryId>` | Conditional webhook replay claim/result with 30-day TTL; failed processing releases the claim |
+| Repository snapshot | `WORKSPACE#<workspaceId>` | `REPOSITORY_SNAPSHOT#<repositoryId>` | Bounded Git/SVN tree mirror and revision metadata |
+| External share | `SHARE#<token>` | `META` | Recipient-bound share; a `SHARE_INDEX#<token>` workspace projection supports administration |
+| Outbound-link event | `WORKSPACE#<workspaceId>` | `OUTBOUND#<reverseTimestamp>#<id>` | Captured policy decision when capture is enabled |
+| Webhook delivery | `WORKSPACE#<workspaceId>` | `WEBHOOK_DELIVERY#<reverseTimestamp>#<id>` | Bounded automatic/test delivery status without response bodies or secrets |
 | Report summary | `WORKSPACE#<workspaceId>` | `SUMMARY#PROJECT#<projectId>` | Compact project summary |
 | Upload intent | returned by API | not persisted separately | Document starts as `pending` before finalize |
 
@@ -41,10 +56,16 @@ Authenticated Team Spaces data uses one protected on-demand DynamoDB table with 
 - Documents by workspace: `GSI1PK = WORKSPACE#<workspaceId>#DOCUMENTS`, `GSI1SK = UPDATED#<updatedAt>#DOCUMENT#<documentId>`.
 - Work by workspace/update time: `GSI1PK = WORKSPACE#<workspaceId>#WORK`, `GSI1SK = UPDATED#<updatedAt>#PROJECT#<projectId>#WORK#<workItemId>`.
 - Meetings by project/start time: `GSI1PK = PROJECT#<projectId>#MEETINGS`, `GSI1SK = START#<startsAt>#MEETING#<meetingId>`.
+- Activity by workspace/reverse time: `GSI1PK = WORKSPACE#<workspaceId>#ACTIVITY`, `GSI1SK = TIME#<reverseTimestamp>#<activityId>`.
+- Content by workspace/update time: `GSI1PK = WORKSPACE#<workspaceId>#CONTENT`, `GSI1SK = UPDATED#<reverseTimestamp>#<contentId>`.
+- Planning resources by kind/start: `GSI1PK = WORKSPACE#<workspaceId>#PLANNING#<kind>`, `GSI1SK = START#<startDate>#<resourceId>`.
 
 ### GSI2: Assignments and Due Dates
 
 - Assigned work: `GSI2PK = WORKSPACE#<workspaceId>#ASSIGNEE#<userId>`, `GSI2SK = DUE#<dueDate>#WORK#<workItemId>`.
+- Meetings across accessible projects: `GSI2PK = WORKSPACE#<workspaceId>#MEETINGS`, `GSI2SK = START#<startsAt>#PROJECT#<projectId>#MEETING#<meetingId>`.
+- Time across a workspace: `GSI2PK = WORKSPACE#<workspaceId>#TIME`, `GSI2SK = DATE#<date>#USER#<userId>#TIME#<timeEntryId>`.
+- Scheduled notification preferences by due UTC hour: `GSI2PK = NOTIFICATION_SCHEDULE#HOUR#<00-23>`, `GSI2SK = ACTIVE#WORKSPACE#<workspaceId>#USER#<userId>`.
 
 Status is currently a validated residual filter on project, assignee, or workspace-work pages. A status-first access path requires a separate projection record; one canonical work item cannot occupy both an assignee and status partition in the same GSI.
 
@@ -54,6 +75,7 @@ Status is currently a validated residual filter on project, assignee, or workspa
 | --- | --- |
 | Fetch current user and workspace membership | Table PK/SK |
 | Fetch workspace task taxonomy and workflow | Strongly consistent table PK/SK read; fall back to the code-defined v1 default without writing on GET |
+| Fetch/replace workspace capabilities | Strongly consistent `CAPABILITIES` read and conditional versioned Put; embedded secrets are rejected |
 | Replace workspace task taxonomy and workflow | Conditional table Put on the expected version; first customization requires the virtual default version and `attribute_not_exists(PK)` |
 | List user accounts | Table query on `USER#<userId>` account index |
 | Create user account | Transaction writes account `META`, owner `MEMBER`, and user account index |
@@ -71,11 +93,18 @@ Status is currently a validated residual filter on project, assignee, or workspa
 | Filter tasks by status and due date | Selected Work Query path plus bounded residual filtering |
 | List meetings by project/start time | Existing GSI1 with a project- and query-bound opaque keyset cursor |
 | Fetch one meeting | Direct `PROJECT#<projectId> / MEETING#<meetingId>` strongly consistent read after resolving project access |
+| List meetings across a workspace | GSI2 workspace-meetings partition plus project-access filtering |
 | Create one meeting | One transaction writes the conditional canonical row, activity event, and optional idempotency claim; changing content never reuses another caller's scoped key |
 | Update one meeting | One transaction conditionally replaces the canonical version and appends activity; changing `startsAt` rewrites GSI1SK on that same row |
 | List time entries by user and date range | Table query on user PK |
 | List time entries by project and date range | GSI1 |
 | List project activity in reverse chronological order | Table query on project PK |
+| List workspace activity and notifications | GSI1 workspace-activity partition plus actor/mention/reminder filters |
+| List/fetch project content and revisions | Project content prefix query, direct canonical key, and content revision partition |
+| Update collaborative content presence | Conditional direct TTL lease key; expired leases are ignored before DynamoDB cleanup |
+| Merge collaborative content | Strong current-content read plus at most 100 recent revision rows; transform the stable change against every intervening operation and transactionally write canonical content, immutable revision, and activity |
+| List planning resources / compare baseline / burndown | Project planning prefix query or kind-specific GSI1; bounded project work query for derived comparison |
+| Read/start/stop timer | Direct user/workspace timer key; conditional create and transactional stop/time-entry write |
 | List saved views for a user | Table query on user PK |
 | List project documents | Table query on project PK |
 | List workspace documents | GSI1 |
@@ -83,6 +112,9 @@ Status is currently a validated residual filter on project, assignee, or workspa
 | Fetch, mutate, or download one document | Direct table PK/SK; API requires `projectId` with `documentId` |
 | Build application data inventory | Existing bounded workspace, project, work, meeting, user, document, and activity queries |
 | Fetch project-summary records for reporting | GSI1 |
+| Search workspace records | Bounded workspace project/work/document/content/activity projections; project access is applied before text matching |
+| Browse integrations, repository snapshots, shares, and deliveries | Workspace prefix query or exact token/snapshot key; every returned project reference is access-filtered |
+| Reconcile LDAP users/groups | Workspace capability/member prefix queries plus exact conditional member/capability writes; no table scan |
 
 ## Guardrails
 

@@ -8,13 +8,21 @@ import {
   assertWorkQueryConfiguration,
   ContractValidationError,
   defaultWorkConfiguration,
+  defaultWorkspaceCapabilities,
   parseDocumentFinalizeInput,
   parseDocumentUploadIntentInput,
   parsePortfolioPatchInput,
+  parseMembershipInput,
+  parseNotificationPreferencesInput,
+  parseProjectInput,
+  parseTimeEntryPatchInput,
+  parseTimeEntryInput,
+  parseTimerStartInput,
   parseWorkConfigurationInput,
   parseWorkItemInput,
   parseWorkItemPatchInput,
   parseWorkQuery,
+  parseWorkspaceCapabilitiesInput,
   roles,
   workQueryVersion
 } from "../src/index.js";
@@ -67,19 +75,101 @@ test("work item input accepts canonical planning fields", () => {
   assert.equal(parseWorkItemInput({title: "Custom", type: "user-story", status: "quality-review"}).status, "quality-review");
 });
 
+test("project and task contracts expose parity lifecycle fields", () => {
+  const project = parseProjectInput({
+    name: "Child delivery",
+    parentProjectId: "project-parent",
+    modules: ["work", "meetings", "wiki"],
+    template: true
+  });
+  assert.equal(project.parentProjectId, "project-parent");
+  assert.deepEqual(project.modules, ["work", "meetings", "wiki"]);
+  assert.equal(project.template, true);
+  assert.throws(() => parseProjectInput({name: "Invalid", modules: ["work", "unknown"]}), /Expected one of/);
+
+  const task = parseWorkItemInput({
+    title: "Schedule rollout",
+    accountableId: "user-owner",
+    category: "Delivery",
+    versionName: "1.0",
+    remainingMinutes: 120,
+    percentComplete: 25,
+    schedulingMode: "automatic",
+    relations: [{type: "predecessor", targetId: "work-one", lagDays: 2}]
+  });
+  assert.equal(task.accountableId, "user-owner");
+  assert.equal(task.remainingMinutes, 120);
+  assert.equal(task.percentComplete, 25);
+  assert.equal(task.schedulingMode, "automatic");
+  assert.deepEqual(task.relations, [{type: "predecessor", targetId: "work-one", lagDays: 2}]);
+  assert.throws(() => parseWorkItemInput({title: "Invalid", relations: [{type: "unknown", targetId: "work-one"}]}), /Expected one of/);
+});
+
 test("work item patches can clear planning fields", () => {
   assert.deepEqual(parseWorkItemPatchInput({
     version: 3,
     periodName: "",
     periodGoal: "",
-    milestoneName: ""
+    milestoneName: "",
+    parentId: "",
+    assigneeId: "",
+    startDate: "",
+    dueDate: ""
   }), {
     version: 3,
     periodName: "",
     periodGoal: "",
-    milestoneName: ""
+    milestoneName: "",
+    parentId: "",
+    assigneeId: "",
+    startDate: "",
+    dueDate: ""
   });
   assert.throws(() => parseWorkItemPatchInput({status: "done"}), /version is required/);
+});
+
+test("time entry edits require stable addressing and optimistic versions", () => {
+  assert.deepEqual(parseTimeEntryPatchInput({
+    version: 2,
+    originalEntryDate: "2026-08-20",
+    entryDate: "2026-08-21",
+    durationMinutes: 90,
+    billable: true
+  }), {
+    version: 2,
+    originalEntryDate: "2026-08-20",
+    entryDate: "2026-08-21",
+    durationMinutes: 90,
+    billable: true
+  });
+  assert.throws(() => parseTimeEntryPatchInput({version: 1}), /originalEntryDate/);
+});
+
+test("custom fields cover every supported entity section and persistent timers", () => {
+  const capabilities = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  capabilities.customFields = [
+    {id: "work-text", name: "Work text", type: "long-text", entityType: "work-item"},
+    {id: "project-link", name: "Project link", type: "link", entityType: "project"},
+    {id: "user-flag", name: "User flag", type: "boolean", entityType: "user"},
+    {id: "group-code", name: "Group code", type: "string", entityType: "group"},
+    {id: "release-owner", name: "Release owner", type: "user", entityType: "version"},
+    {id: "time-code", name: "Time code", type: "string", entityType: "time-entry"},
+    {id: "activity-code", name: "Activity code", type: "integer", entityType: "time-entry-activity"},
+    {id: "priority-score", name: "Priority score", type: "decimal", entityType: "priority"}
+  ];
+  assert.deepEqual(parseWorkspaceCapabilitiesInput(capabilities).customFields.map((field) => field.entityType), [
+    "work-item", "project", "user", "group", "version", "time-entry", "time-entry-activity", "priority"
+  ]);
+  const longText = "x".repeat(5000);
+  assert.equal(parseTimeEntryInput({projectId: "project-pilot", entryDate: "2026-08-27", durationMinutes: 30, customFields: {notes: longText}}).customFields.notes.length, 5000);
+  assert.deepEqual(parseTimerStartInput({projectId: "project-pilot", activityId: "research", customFields: {"time-code": "R&D"}}), {
+    projectId: "project-pilot",
+    workItemId: undefined,
+    description: "",
+    billable: false,
+    activityId: "research",
+    customFields: {"time-code": "R&D"}
+  });
 });
 
 test("parses and versions bounded work queries", () => {
@@ -234,4 +324,67 @@ test("requires bounded upload metadata and a SHA-256 digest", () => {
     checksumSha256
   }), /valid media type/);
   assert.throws(() => parseDocumentFinalizeInput({documentId: "document-one"}), /projectId/);
+});
+
+test("validates versioned workspace capabilities without accepting embedded secrets", () => {
+  const capabilities = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  capabilities.customFields.push({id: "business-value", name: "Business value", type: "weighted", entityType: "work-item", options: [{id: "high", weight: 8}]});
+  capabilities.forms.push({id: "delivery-form", name: "Delivery form", typeIds: ["task"], fields: ["title", {id: "business-value", required: true, helpText: "Choose a weighted value"}]});
+  capabilities.customRoles.push({id: "quality-reviewer", name: "Quality reviewer", permissions: ["workspace:read", "work:manage"]});
+  capabilities.webhooks.push({id: "delivery-hook", name: "Delivery hook", url: "https://hooks.example.test/teamspaces", eventTypes: ["work.updated"]});
+  capabilities.connectors.push({id: "managed-drive", name: "Managed drive", type: "sharepoint", baseUrl: "https://graph.microsoft.test", credentialReference: "graph-main", driveId: "drive-one", managedPermissions: true, managedPermissionDomains: ["example.test"], managedResources: [{projectId: "project-pilot", resourceId: "folder-one"}]});
+  const parsed = parseWorkspaceCapabilitiesInput(capabilities);
+  assert.equal(parsed.customFields[0].type, "weighted");
+  assert.equal(parsed.forms[0].fields[1].id, "business-value");
+  assert.equal(parsed.customRoles[0].permissions.includes("work:manage"), true);
+  assert.equal(parsed.connectors[0].managedResources[0].resourceId, "folder-one");
+  assert.equal(parseMembershipInput({email: "reviewer@example.test", role: "custom:quality-reviewer"}).role, "custom:quality-reviewer");
+  const withSecret = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  withSecret.authentication.ldap.password = "do-not-store";
+  assert.throws(() => parseWorkspaceCapabilitiesInput(withSecret), /credential reference/);
+  const privateWebhook = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  privateWebhook.webhooks.push({id: "private-hook", name: "Private", url: "https://127.0.0.1/events", eventTypes: ["*"]});
+  assert.throws(() => parseWorkspaceCapabilitiesInput(privateWebhook), /public HTTPS/);
+  const unknownFormField = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  unknownFormField.forms.push({id: "invalid-form", name: "Invalid", fields: ["not-a-real-field"]});
+  assert.throws(() => parseWorkspaceCapabilitiesInput(unknownFormField), /unknown field/);
+  const invalidManagedResource = JSON.parse(JSON.stringify(defaultWorkspaceCapabilities));
+  invalidManagedResource.connectors.push({id: "managed-drive", name: "Managed drive", type: "sharepoint", baseUrl: "https://graph.microsoft.test", credentialReference: "graph-main", managedResources: [{projectId: "project-pilot"}]});
+  assert.throws(() => parseWorkspaceCapabilitiesInput(invalidManagedResource), /managedResources/);
+});
+
+test("derives duration from exact start and end timestamps", () => {
+  const parsed = parseTimeEntryInput({
+    projectId: "project-pilot",
+    entryDate: "2026-08-26",
+    startedAt: "2026-08-26T13:00:00Z",
+    endedAt: "2026-08-26T14:15:00Z"
+  });
+  assert.equal(parsed.durationMinutes, 75);
+  assert.equal(parsed.startedAt, "2026-08-26T13:00:00.000Z");
+});
+
+test("validates versioned per-user notification preferences", () => {
+  assert.deepEqual(parseNotificationPreferencesInput({
+    version: 4,
+    participationRules: ["assigned", "watching"],
+    projectOverrides: [{projectId: "project-pilot", participationRules: ["accountable"]}],
+    dateAlertsEnabled: false,
+    emailDigest: "weekly",
+    deliveryWebhookId: "mail-gateway",
+    digestHourUtc: 14,
+    weeklyDay: 5
+  }), {
+    version: 4,
+    participationRules: ["assigned", "watching"],
+    projectOverrides: [{projectId: "project-pilot", participationRules: ["accountable"]}],
+    dateAlertsEnabled: false,
+    emailDigest: "weekly",
+    deliveryWebhookId: "mail-gateway",
+    digestHourUtc: 14,
+    weeklyDay: 5
+  });
+  assert.throws(() => parseNotificationPreferencesInput({version: 1, participationRules: [], projectOverrides: [], emailDigest: "daily", digestHourUtc: 8, weeklyDay: 1}), /delivery webhook/);
+  assert.throws(() => parseNotificationPreferencesInput({version: 1, participationRules: ["everything"], projectOverrides: [], emailDigest: "none", digestHourUtc: 8, weeklyDay: 1}), /unsupported rule/);
+  assert.throws(() => parseNotificationPreferencesInput({version: 1, participationRules: [], projectOverrides: [], emailDigest: "none", digestHourUtc: 24, weeklyDay: 1}), /digestHourUtc/);
 });

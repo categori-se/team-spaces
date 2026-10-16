@@ -7,7 +7,7 @@ title: Meetings
 ```js
 import {apiClient} from "../lib/api.js";
 import {meetingTourMeetingId, meetingTourProjectId} from "../lib/public-demo-tour.js";
-import {actionPanel, buttonLink, cursorPager, emptyActionView, errorView, meetingDeferredNotice, meetingDetailView, meetingForm, meetingProjectSelector, meetingTaskSearchForm, meetingsWorkspace, pageHeader, toolbar, workspaceTopNav} from "../components/ui.js";
+import {actionPanel, buttonLink, cursorPager, emptyActionView, errorView, globalMeetingsTable, meetingDeferredNotice, meetingDetailView, meetingForm, meetingProjectSelector, meetingTaskSearchForm, meetingsWorkspace, pageHeader, toolbar, workspaceTopNav} from "../components/ui.js";
 ```
 
 ```js
@@ -21,7 +21,8 @@ const cursor = params.get("cursor") ?? "";
 const taskSearch = params.get("taskSearch") ?? "";
 const shellResult = await Promise.all([
   client.projects.list({limit: 100, signal: invalidation}),
-  client.me({signal: invalidation})
+  client.me({signal: invalidation}),
+  client.meetings.all({limit: 50, signal: invalidation})
 ]).catch((error) => error);
 ```
 
@@ -29,7 +30,7 @@ const shellResult = await Promise.all([
 if (shellResult instanceof Error) {
   display(errorView(shellResult, refreshPage));
 } else {
-  const [projectsResult, me] = shellResult;
+  const [projectsResult, me, globalMeetings] = shellResult;
   const projectId = meetingTourProjectId(projectsResult.items, {
     requestedProjectId,
     isPublicDemo: client.isPublicDemo
@@ -52,6 +53,7 @@ if (shellResult instanceof Error) {
       : [buttonLink("Open projects", "/app/projects")]
   }));
   display(actionPanel("Choose project", meetingProjectSelector(projects, projectId), {id: "project-selector", open: !selectedProject, meta: selectedProject?.name ?? "Required"}));
+  display(actionPanel("Workspace meetings", globalMeetingsTable(globalMeetings.items, projects), {meta: `${globalMeetings.items.length} visible meetings`}));
 
   if (!projectId) {
     display(emptyActionView("Select a project to open meetings", "Meeting and task requests start only after you choose a project.", {label: "Choose project", href: "#project-selector"}));
@@ -65,13 +67,14 @@ if (shellResult instanceof Error) {
     const result = await Promise.all([
       client.meetings.list(selectedProject.id, {limit: 20, cursor: cursor || undefined, signal: invalidation}),
       client.workItems.list(selectedProject.id, {limit: 100, search: taskSearch || undefined, signal: invalidation}),
-      client.memberships.list({signal: invalidation})
+      client.memberships.list({signal: invalidation}),
+      client.documents.list({projectId: selectedProject.id, signal: invalidation})
     ]).catch((error) => error);
 
     if (result instanceof Error) {
       display(errorView(result, refreshPage));
     } else {
-      const [meetings, workItems, memberships] = result;
+      const [meetings, workItems, memberships, documents] = result;
       const meetingId = meetingTourMeetingId(meetings.items, {
         requestedMeetingId,
         isPublicDemo: client.isPublicDemo,
@@ -84,12 +87,13 @@ if (shellResult instanceof Error) {
         display(errorView(selectedMeeting, refreshPage));
       } else {
         if (selectedMeeting) {
-          display(meetingDetailView(selectedMeeting, client, {memberships: memberships.items, workItems: workItems.items, canManage, onSaved: refreshPage}));
+          display(meetingDetailView(selectedMeeting, client, {memberships: memberships.items, workItems: workItems.items, documents: documents.items, currentUserId: me.user?.id, canManage, onSaved: refreshPage}));
           if (canManage && !["closed", "cancelled"].includes(selectedMeeting.status)) {
             display(actionPanel("Edit meeting", meetingForm(client, selectedProject, {
               meeting: selectedMeeting,
               memberships: memberships.items,
               workItems: workItems.items,
+              documents: documents.items,
               currentUserId: me.user?.id,
               onSaved: refreshPage
             }), {id: "edit-meeting", meta: "Details, agenda, participants"}));
@@ -106,6 +110,7 @@ if (shellResult instanceof Error) {
           canManage ? actionPanel("Create meeting", meetingForm(client, selectedProject, {
             memberships: memberships.items,
             workItems: workItems.items,
+            documents: documents.items,
             currentUserId: me.user?.id,
             onSaved: (meeting) => {
               if (!meeting?.id) return refreshPage();
@@ -113,7 +118,7 @@ if (shellResult instanceof Error) {
               location.assign(`/app/meetings?${detailParams}`);
             }
           }), {id: "new-meeting", open: !meetings.items.length || location.hash === "#new-meeting", meta: "Draft agenda and participants"}) : undefined,
-          actionPanel("More meeting capabilities", meetingDeferredNotice(), {meta: "Not available yet"})
+          actionPanel("Meeting capabilities", meetingDeferredNotice(), {meta: "Series, invitations, exports, and records"})
         ].filter(Boolean)));
       }
     }

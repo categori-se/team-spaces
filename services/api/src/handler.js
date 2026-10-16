@@ -30,6 +30,10 @@ import {
 import {log} from "./observability/log.js";
 import {route} from "./routes/router.js";
 import {parseJsonBody} from "./validation/http.js";
+import {createLdapDirectoryRuntime} from "./directory/ldap.js";
+import {verifyLdapSession} from "./directory/ldap-session.js";
+import {environmentCredentialResolver} from "./integrations/provider-adapters.js";
+import {createPublicCoordinationHandler, publicCoordinationPathPrefix, publicProjectsPath} from "./public-coordination.js";
 
 const defaultRepository = process.env.TABLE_NAME ? createDynamoRepositoryFromEnv() : new MemoryRepository();
 const defaultPublicDemoRepository = process.env.TABLE_NAME
@@ -38,6 +42,7 @@ const defaultPublicDemoRepository = process.env.TABLE_NAME
 const defaultPublicDemoControl = process.env.TABLE_NAME
   ? new DynamoPublicDemoControl({tableName: process.env.TABLE_NAME})
   : new MemoryPublicDemoControl({slot: "a"});
+const defaultLdapRuntime = createLdapDirectoryRuntime({resolveCredential: environmentCredentialResolver()});
 
 /**
  * @param {Record<string, string | undefined>} headers
@@ -61,6 +66,54 @@ function safeLogPath(value) {
   return String(value ?? "")
     .replace(/[^\x20-\x7e]/g, "?")
     .slice(0, 256);
+}
+
+/**
+ * Translate mutation paths into stable integration event names. The explicit
+ * webhook delivery endpoint is a test/replay surface and must never publish
+ * itself recursively.
+ * @param {string} method
+ * @param {string} rawPath
+ */
+export function mutationWebhookEvent(method, rawPath) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return undefined;
+  const path = rawPath.replace(/^\/api\/v1(?:\/demo)?/, "") || "/";
+  if (/^\/(?:webhooks\/[^/]+\/deliver|notifications\/digest\/deliver|mcp)(?:\/|$)/.test(path)) return undefined;
+  /** @type {Array<[RegExp, string]>} */
+  const rules = [
+    [/^\/projects\/[^/]+\/work-items\/[^/]+\/actions\//, "work.custom-action"],
+    [/^\/projects\/[^/]+\/work-items\/[^/]+\/copy$/, "work.copied"],
+    [/^\/projects\/[^/]+\/work-items\/[^/]+\/move$/, "work.moved"],
+    [/^\/projects\/[^/]+\/work-items\/[^/]+$/, `work.${method === "DELETE" ? "deleted" : "updated"}`],
+    [/^\/projects\/[^/]+\/work-items$/, "work.created"],
+    [/^\/projects\/[^/]+\/copy$/, "project.copied"],
+    [/^\/projects\/[^/]+\/(?:archive|restore)$/, `project.${path.endsWith("/archive") ? "archived" : "restored"}`],
+    [/^\/projects\/[^/]+$/, `project.${method === "DELETE" ? "deleted" : "updated"}`],
+    [/^\/projects$/, "project.created"],
+    [/^\/meetings\/[^/]+\/attendance$/, "meeting.attendance-updated"],
+    [/^\/meetings\/[^/]+\/copy$/, "meeting.copied"],
+    [/^\/meetings\/[^/]+$/, `meeting.${method === "DELETE" ? "deleted" : "updated"}`],
+    [/^\/meetings$/, "meeting.created"],
+    [/^\/project-content\/[^/]+\/operations$/, "content.operation-applied"],
+    [/^\/project-content\/[^/]+\/presence$/, "content.presence-updated"],
+    [/^\/project-content\/[^/]+$/, `content.${method === "DELETE" ? "deleted" : "updated"}`],
+    [/^\/project-content$/, "content.created"],
+    [/^\/time-entries\/[^/]+$/, `time.${method === "DELETE" ? "deleted" : "updated"}`],
+    [/^\/time-entries$/, "time.created"],
+    [/^\/activity$/, "comment.created"],
+    [/^\/documents\/[^/]+\/scan$/, "document.scanned"],
+    [/^\/documents\/[^/]+\/scan-request$/, "document.scan-requested"],
+    [/^\/documents\/finalize$/, "document.finalized"],
+    [/^\/documents\/upload-intent$/, "document.upload-requested"],
+    [/^\/documents\/[^/]+$/, "document.updated"],
+    [/^\/planning-resources/, "planning.updated"],
+    [/^\/capabilities$/, "capabilities.updated"],
+    [/^\/directory\/sync$/, "directory.synchronized"],
+    [/^\/external-shares/, "external-share.updated"],
+    [/^\/integration-links/, "integration-link.updated"],
+    [/^\/integrations\//, "integration.event-received"]
+  ];
+  return rules.find(([pattern]) => pattern.test(path))?.[1];
 }
 
 /** @param {string} left @param {string} right */
@@ -145,13 +198,20 @@ function identityFromEvent(event) {
 }
 
 /**
- * @param {{repository?: any}} [dependencies]
+ * @param {{repository?: any, ldapRuntime?: any}} [dependencies]
  */
 export function createHandler(dependencies = {}) {
-  return createRequestHandler({
-    repository: dependencies.repository ?? defaultRepository,
+  const repository = dependencies.repository ?? defaultRepository;
+  const privateHandler = createRequestHandler({
+    repository,
+    ldapRuntime: dependencies.ldapRuntime ?? defaultLdapRuntime,
     publicDemoMode: false
   });
+  const publicHandler = createPublicCoordinationHandler({repository, originAllows: originVerificationAllows});
+  return (/** @type {any} */ event) => {
+    const path = event?.rawPath ?? event?.path ?? "";
+    return path.startsWith(publicCoordinationPathPrefix) || path === publicProjectsPath || path.startsWith(`${publicProjectsPath}/`) ? publicHandler(event) : privateHandler(event);
+  };
 }
 
 /**
@@ -159,11 +219,12 @@ export function createHandler(dependencies = {}) {
  * supplies identity or account selection; both come from the active demo
  * pointer in the dedicated demo table.
  *
- * @param {{repository?: any, control?: any, enabled?: boolean}} [dependencies]
+ * @param {{repository?: any, ldapRuntime?: any, control?: any, enabled?: boolean}} [dependencies]
  */
 export function createPublicDemoHandler(dependencies = {}) {
   return createRequestHandler({
     repository: dependencies.repository ?? defaultPublicDemoRepository,
+    ldapRuntime: dependencies.ldapRuntime ?? defaultLdapRuntime,
     publicDemoControl: dependencies.control ?? defaultPublicDemoControl,
     publicDemoMode: true,
     publicDemoEnabled: dependencies.enabled ?? true
@@ -171,16 +232,20 @@ export function createPublicDemoHandler(dependencies = {}) {
 }
 
 /**
- * @param {{repository: any, publicDemoControl?: any, publicDemoMode: boolean, publicDemoEnabled?: boolean}} options
+ * @param {{repository: any, ldapRuntime: any, publicDemoControl?: any, publicDemoMode: boolean, publicDemoEnabled?: boolean}} options
  */
 function createRequestHandler(options) {
-  const {repository, publicDemoControl, publicDemoMode, publicDemoEnabled = true} = options;
+  const {repository, ldapRuntime, publicDemoControl, publicDemoMode, publicDemoEnabled = true} = options;
   /** @param {any} event */
   return async function handler(event) {
     const method = event?.requestContext?.http?.method ?? event?.httpMethod ?? "GET";
     const rawPath = event?.rawPath ?? event?.path ?? "/";
     const rawQueryString = event?.rawQueryString ?? "";
     const publicHealthRequest = method === "GET" && rawPath === "/api/v1/health";
+    const rawProviderWebhookRequest = !publicDemoMode && method === "POST" && /^\/api\/v1\/provider-webhooks\/[^/]+\/[^/]+$/.test(rawPath);
+    const rawProviderApiRequest = !publicDemoMode && ["GET", "POST"].includes(method) && /^\/api\/v1\/provider-api\/[^/]+\/[^/]+\/work-items$/.test(rawPath);
+    const rawLdapLoginRequest = !publicDemoMode && method === "POST" && /^\/api\/v1\/ldap-auth\/[^/]+$/.test(rawPath);
+    const rawLdapApiRequest = !publicDemoMode && /^\/api\/v1\/ldap\/[^/]+\/.+/.test(rawPath);
     let publicPageLimit = publicDemoPageLimit;
     const correlationId = requestCorrelationId(event.headers ?? {});
     const origin = header(event.headers ?? {}, "origin") ?? "";
@@ -192,7 +257,7 @@ function createRequestHandler(options) {
       "cache-control": "no-store",
       "x-correlation-id": correlationId,
       "access-control-allow-origin": allowedOrigin,
-      "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
       "access-control-allow-headers": "authorization,content-type,x-correlation-id,idempotency-key,x-demo-user-id,x-demo-user-email,x-demo-user-name,x-teamspaces-account-id",
       "access-control-expose-headers": "x-correlation-id"
     };
@@ -202,7 +267,7 @@ function createRequestHandler(options) {
     }
 
     try {
-      if (!originVerificationAllows(event.headers ?? {})) {
+      if (!rawProviderWebhookRequest && !rawProviderApiRequest && !originVerificationAllows(event.headers ?? {})) {
         throw new ForbiddenError("Requests must use the supported application entry point");
       }
       if (
@@ -217,6 +282,12 @@ function createRequestHandler(options) {
         throw new ForbiddenError("This operation is not available in the shared demo.");
       }
       const requestPath = url.pathname;
+      const providerWebhookMatch = rawProviderWebhookRequest && requestPath === rawPath
+        ? requestPath.match(/^\/api\/v1\/provider-webhooks\/([^/]+)\/([^/]+)$/)
+        : undefined;
+      const providerApiMatch = rawProviderApiRequest && requestPath === rawPath ? requestPath.match(/^\/api\/v1\/provider-api\/([^/]+)\/([^/]+)\/work-items$/) : undefined;
+      const ldapLoginMatch = rawLdapLoginRequest && requestPath === rawPath ? requestPath.match(/^\/api\/v1\/ldap-auth\/([^/]+)$/) : undefined;
+      const ldapApiMatch = rawLdapApiRequest && requestPath === rawPath ? requestPath.match(/^\/api\/v1\/ldap\/([^/]+)(\/.*)$/) : undefined;
       const demoPolicy = publicDemoMode ? publicDemoRequestPolicy(method, requestPath) : undefined;
       const publicHealth = !publicDemoMode && publicHealthRequest && requestPath === "/api/v1/health";
       if (publicDemoMode && !publicDemoEnabled) {
@@ -243,6 +314,12 @@ function createRequestHandler(options) {
           throw new ValidationError("Public API read requests must not include a body.");
         }
       }
+      if (rawProviderWebhookRequest || rawProviderApiRequest || rawLdapLoginRequest) {
+        const bodyBytes = event?.isBase64Encoded ? Buffer.from(event?.body ?? "", "base64").byteLength : Buffer.byteLength(event?.body ?? "", "utf8");
+        const limit = rawLdapLoginRequest ? 8 * 1024 : rawProviderApiRequest ? 128 * 1024 : 1024 * 1024;
+        if (bodyBytes > limit) throw new PayloadTooLargeError(`Service request bodies must not exceed ${limit} bytes.`);
+        if (method === "GET" && bodyBytes) throw new ValidationError("Service API read requests must not include a body.");
+      }
       const idempotencyKey = method === "POST" && requestPath.endsWith("/meetings")
         ? parseIdempotencyKey(event.headers ?? {})
         : undefined;
@@ -253,14 +330,69 @@ function createRequestHandler(options) {
           throw new TooManyRequestsError("The shared demo has reached its daily edit limit. It will reset automatically.");
         }
       }
-      const identity = publicDemoMode
-        ? publicDemoIdentity(activeDemo.activeSlot)
-        : publicHealth ? demoUser : identityFromEvent(event);
-      const requestedAccountId = publicDemoMode
-        ? activeDemo.workspaceId
-        : header(event.headers ?? {}, "x-teamspaces-account-id");
-      const bootstrap = publicHealth ? {workspace: {id: "health"}, user: identity, membership: {role: "viewer"}} : await repository.getOrBootstrap(identity, requestedAccountId);
-      const body = ["POST", "PUT", "PATCH", "DELETE"].includes(method) ? parseJsonBody(event?.body) : {};
+      let requestedAccountId = header(event.headers ?? {}, "x-teamspaces-account-id");
+      if (publicDemoMode) requestedAccountId = activeDemo.workspaceId;
+      if (ldapApiMatch) requestedAccountId = decodeURIComponent(ldapApiMatch[1]);
+      if (ldapLoginMatch) requestedAccountId = decodeURIComponent(ldapLoginMatch[1]);
+      if (providerApiMatch) requestedAccountId = decodeURIComponent(providerApiMatch[1]);
+      if (providerWebhookMatch) requestedAccountId = decodeURIComponent(providerWebhookMatch[1]);
+      const scimServiceRequest = !publicDemoMode && requestPath.startsWith("/api/v1/scim/v2/");
+      const scannerServiceRequest = !publicDemoMode && method === "POST" && /^\/api\/v1\/documents\/[^/]+\/scan$/.test(requestPath);
+      let identity;
+      let bootstrap;
+      if (providerApiMatch) {
+        const connectorId = decodeURIComponent(providerApiMatch[2]);
+        identity = {id: `provider-api-${connectorId}`, email: "provider-api@service.invalid", name: "Provider API service"};
+        const workspace = await repository.getWorkspace({workspaceId: requestedAccountId});
+        if (workspace.id !== requestedAccountId) throw new UnauthorizedError("Provider API account is invalid");
+        bootstrap = {workspace, user: identity, membership: {role: "workspace-admin", status: "active"}};
+      } else if (ldapLoginMatch) {
+        identity = {id: "ldap-login-service", email: "ldap-login@service.invalid", name: "LDAP login service"};
+        const workspace = await repository.getWorkspace({workspaceId: requestedAccountId});
+        if (workspace.id !== requestedAccountId) throw new UnauthorizedError("LDAP authentication is unavailable");
+        bootstrap = {workspace, user: identity, membership: {role: "workspace-admin", status: "active"}};
+      } else if (ldapApiMatch) {
+        const supplied = (header(event.headers ?? {}, "authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+        const capabilities = await repository.getWorkspaceCapabilities({workspaceId: requestedAccountId});
+        if (!capabilities.authentication?.ldap?.enabled) throw new UnauthorizedError("LDAP authentication is unavailable");
+        const credential = await ldapRuntime.credential(capabilities.authentication.ldap);
+        identity = verifyLdapSession(supplied, credential, {workspaceId: requestedAccountId});
+        bootstrap = await repository.getOrBootstrap(identity, requestedAccountId);
+      } else if (providerWebhookMatch) {
+        const connectorId = decodeURIComponent(providerWebhookMatch[2]);
+        identity = {id: `provider-${connectorId}`, email: "provider@service.invalid", name: "Provider webhook service"};
+        const workspace = await repository.getWorkspace({workspaceId: requestedAccountId});
+        if (workspace.id !== requestedAccountId) throw new UnauthorizedError("Provider webhook account is invalid");
+        bootstrap = {workspace, user: identity, membership: {role: "workspace-admin", status: "active"}};
+      } else if (scimServiceRequest || scannerServiceRequest) {
+        if (!requestedAccountId) throw new UnauthorizedError(`${scimServiceRequest ? "SCIM" : "Scanner"} requests require an account identifier`);
+        const authorization = header(event.headers ?? {}, "authorization") ?? "";
+        const supplied = authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+        const capabilities = await repository.getWorkspaceCapabilities({workspaceId: requestedAccountId});
+        const expectedHash = String(scimServiceRequest ? capabilities.scim?.bearerCredentialHash : capabilities.security?.scannerCredentialHash ?? "");
+        const suppliedHash = supplied ? createHash("sha256").update(supplied, "utf8").digest("hex") : "";
+        const serviceEnabled = scimServiceRequest ? capabilities.scim?.enabled : capabilities.security?.malwareScanning !== "disabled";
+        if (!serviceEnabled || !/^[a-f0-9]{64}$/i.test(expectedHash) || !suppliedHash || !sameSecret(suppliedHash, expectedHash.toLowerCase())) {
+          throw new UnauthorizedError(`${scimServiceRequest ? "SCIM" : "Scanner"} bearer token is invalid`);
+        }
+        identity = scimServiceRequest
+          ? {id: "scim-service", email: "scim@service.invalid", name: "SCIM provisioning service"}
+          : {id: "scanner-service", email: "scanner@service.invalid", name: "Document scanner service"};
+        bootstrap = {workspace: await repository.getWorkspace({workspaceId: requestedAccountId}), user: identity, membership: {role: "workspace-admin", status: "active"}};
+      } else {
+        identity = publicDemoMode
+          ? publicDemoIdentity(activeDemo.activeSlot)
+          : publicHealth ? demoUser : identityFromEvent(event);
+        bootstrap = publicHealth ? {workspace: {id: "health"}, user: identity, membership: {role: "viewer"}} : await repository.getOrBootstrap(identity, requestedAccountId);
+      }
+      if (!publicHealth && String(bootstrap.membership?.role ?? "").startsWith("custom:")) {
+        const capabilities = await repository.getWorkspaceCapabilities({workspaceId: bootstrap.workspace.id});
+        const roleId = String(bootstrap.membership.role).slice("custom:".length);
+        const customRole = capabilities.customRoles?.find((/** @type {any} */ role) => role.id === roleId);
+        bootstrap.membership = {...bootstrap.membership, permissions: customRole?.permissions ?? []};
+      }
+      const requestBody = event?.isBase64Encoded ? Buffer.from(event?.body ?? "", "base64").toString("utf8") : event?.body;
+      const body = ["POST", "PUT", "PATCH", "DELETE"].includes(method) ? parseJsonBody(requestBody) : {};
       if (publicDemoMode) {
         try {
           assertPublicDemoPayload(body);
@@ -276,6 +408,11 @@ function createRequestHandler(options) {
         workspaceId: bootstrap.workspace.id,
         membership: bootstrap.membership,
         idempotencyKey,
+        ...(!providerWebhookMatch && !publicDemoMode ? {providerToken: (header(event.headers ?? {}, "authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1]} : {}),
+        ...(providerWebhookMatch ? {providerWebhook: true} : {}),
+        ...(providerApiMatch ? {providerApi: true} : {}),
+        ...(ldapLoginMatch ? {ldapLogin: true} : {}),
+        ...(ldapApiMatch ? {ldapSession: true} : {}),
         ...(publicDemoMode ? {
           publicDemo: {
             slot: activeDemo.activeSlot,
@@ -287,10 +424,19 @@ function createRequestHandler(options) {
           }
         } : {})
       };
-      const result = await route({method, path: requestPath, searchParams: url.searchParams, body, context, repository});
+      const routedPath = ldapApiMatch ? `/api/v1${ldapApiMatch[2]}` : requestPath;
+      const result = await route({method, path: routedPath, searchParams: url.searchParams, body, context, repository, ldapRuntime, headers: event.headers ?? {}, rawBody: requestBody ?? ""});
+      const webhookEvent = publicDemoMode ? undefined : mutationWebhookEvent(method, routedPath);
+      if (webhookEvent && typeof repository.publishWebhookEvent === "function") {
+        try {
+          await repository.publishWebhookEvent(context, webhookEvent, result?.body !== undefined ? result.body : result);
+        } catch (error) {
+          log("warn", "automatic webhook publication failed", {correlationId, eventType: webhookEvent, errorName: error instanceof Error ? error.name : "UnknownError"});
+        }
+      }
       const statusCode = typeof result?.statusCode === "number" ? result.statusCode : 200;
       const payload = result?.body !== undefined ? result.body : result;
-      const responseBody = JSON.stringify({data: payload, correlationId});
+      const responseBody = JSON.stringify(result?.rawJson ?? {data: payload, correlationId});
       if (publicDemoMode && Buffer.byteLength(responseBody, "utf8") > publicDemoResponseLimitBytes) {
         throw new PayloadTooLargeError("The shared demo result is too large. Narrow the selected project or filters and try again.");
       }

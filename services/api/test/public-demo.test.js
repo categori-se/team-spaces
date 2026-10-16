@@ -121,10 +121,20 @@ test("the seeded demo supports every application read surface", async () => {
     "/api/v1/demo/time-entries",
     "/api/v1/demo/activity",
     "/api/v1/demo/documents",
+    `/api/v1/demo/project-content?projectId=${project.id}`,
+    "/api/v1/demo/search?q=readiness",
+    "/api/v1/demo/notifications",
+    "/api/v1/demo/notifications/digest",
+    "/api/v1/demo/integrations",
+    "/api/v1/demo/integration-links",
+    "/api/v1/demo/repositories",
     "/api/v1/demo/saved-views",
     "/api/v1/demo/reports/portfolio-summary",
     "/api/v1/demo/reports/planning-summary",
     "/api/v1/demo/reports/project-timeline",
+    "/api/v1/demo/reports/costs",
+    "/api/v1/demo/reports/resources",
+    "/api/v1/demo/security/badge",
     "/api/v1/demo/application-data/summary"
   ];
   for (const path of reads) {
@@ -182,6 +192,7 @@ test("Dynamo project creation namespaces public IDs and atomically registers the
   };
   const repository = new DynamoRepository({tableName: "demo-table", documentClient});
   repository.recordActivity = async () => {};
+  repository.getWorkspaceCapabilities = async () => ({lifecycle: {phases: [{id: "proposed", label: "Proposed", gates: []}]}});
   const context = {
     actorId: publicDemoIdentity("a").id,
     workspaceId: publicDemoWorkspaceId("a"),

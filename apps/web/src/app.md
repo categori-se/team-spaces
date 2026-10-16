@@ -6,7 +6,7 @@ title: Overview
 
 ```js
 import {apiClient} from "./lib/api.js";
-import {buttonLink, configureWorkTaxonomy, dashboardAssignments, dashboardFocus, errorView, loadingView, pageHeader, projectTable, workspaceTopNav} from "./components/ui.js";
+import {applyWorkspaceCapabilities, buttonLink, configureWorkTaxonomy, errorView, loadingView, pageHeader, workspaceDashboard, workspaceTopNav} from "./components/ui.js";
 ```
 
 ```js
@@ -29,7 +29,8 @@ display(pageHeader({
 ```js
 const result = await Promise.all([
   client.bootstrap({signal: invalidation}),
-  client.workItems.assigned({signal: invalidation})
+  client.workItems.assigned({signal: invalidation}),
+  client.activity.list({signal: invalidation})
 ]).catch((error) => error);
 ```
 
@@ -39,10 +40,9 @@ if (result instanceof Error) {
 } else if (!result) {
   display(loadingView("Loading workspace"));
 } else {
-  const [data, assignments] = result;
+  const [data, assignments, activity] = result;
   configureWorkTaxonomy(data.workConfiguration);
-  display(dashboardAssignments(assignments.items));
-  display(dashboardFocus(data));
-  display(projectTable(data.projects, {portfolios: data.portfolios}));
+  applyWorkspaceCapabilities(data.capabilities);
+  display(workspaceDashboard(data, assignments.items, activity.items));
 }
 ```

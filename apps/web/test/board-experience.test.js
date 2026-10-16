@@ -23,6 +23,7 @@ Object.assign(globalThis, {
 const {
   boardColumnEffort,
   configureWorkTaxonomy,
+  ganttDatePatch,
   planningWorkbenchDefaultScope,
   planningWorkbenchView,
   prepareBoardStatusConfiguration
@@ -120,6 +121,13 @@ test("column effort copy explains totals without implying zero progress in open 
     label: "No effort estimated",
     description: "Effort points are optional relative-size estimates, not hours."
   });
+});
+
+test("Gantt direct manipulation preserves duration and clamps resize handles", () => {
+  const item = {startDate: "2026-08-24", dueDate: "2026-08-28", schedulingMode: "automatic"};
+  assert.deepEqual(ganttDatePatch(item, 3), {startDate: "2026-08-27", dueDate: "2026-08-31", schedulingMode: "manual"});
+  assert.deepEqual(ganttDatePatch(item, 10, "start"), {startDate: "2026-08-28", schedulingMode: "manual"});
+  assert.deepEqual(ganttDatePatch(item, -10, "end"), {dueDate: "2026-08-24", schedulingMode: "manual"});
 });
 
 test("new columns gain transitions and occupied columns cannot be retired", () => {
