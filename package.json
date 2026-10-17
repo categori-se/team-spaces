@@ -61,8 +61,8 @@
     "@aws-sdk/client-lambda": "^3.1113.0"
   },
   "devDependencies": {
-    "@types/node": "^24.13.5",
-    "aws-cdk": "^2.1141.0",
+    "@types/node": "^24.19.2",
+    "aws-cdk": "^2.1145.0",
     "esbuild": "^0.28.2",
     "jsdom": "^23.2.0",
     "rimraf": "^6.1.3",
