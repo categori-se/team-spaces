@@ -44,7 +44,7 @@ jobs:
           fs.writeFileSync('apps/web/dist/release-manifest.json',
           JSON.stringify({repository:process.env.RELEASE_REPOSITORY,
           commit_sha:process.env.RELEASE_SHA,workflow_run_id:process.env.RELEASE_RUN_ID},null,2)+'\n')"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: teamspaces-${{ github.sha }}
           path: apps/web/dist
